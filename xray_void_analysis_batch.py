@@ -29,10 +29,10 @@ class AppConfig:
     NORMAL_FONT = ("微软雅黑", 9)
     BOLD_FONT = ("微软雅黑", 10, "bold")
     TASK_FOLDER_PATTERN = re.compile(r"^(?:MD|MN)[A-Za-z0-9]{9}$|^DD[A-Za-z0-9]{10}$", re.I)
-    # 数据文件夹规则：
-    #   019开头BP：15位以0开头（0 + 14位BP码）
-    #   599开头BP：14位以599开头（BP码本身，无前导0）
-    DATA_FOLDER_PATTERN = r"^(0\d{14}|599\d{11})(NG\d*)?(_\d+)?$"
+    # 数据文件夹规则（文件夹基础部分均为15位）：
+    #   019开头BP：15位以0开头（0 + 14位BP码），提取时去掉前导0得到14位BP码
+    #   599开头BP：15位以599开头（BP码本身即15位），提取时原样保留
+    DATA_FOLDER_PATTERN = r"^(0\d{14}|599\d{12})(NG\d*)?(_\d+)?$"
     IMAGE_SUFFIX = (".png", ".jpg", ".jpeg", ".bmp")
     TARGET_IMG_SIZE = (265, 265)
     DIR_IMG_EXPORT = "1_提取X-Ray图片目录"
@@ -179,9 +179,9 @@ class SingleTaskProcessor:
                     code15 = m.group(1)
                     ng = m.group(2) or ""
                     key = code15 + ng
-                    # 019开头：15位以0开头，去掉前导0得到14位BP码
-                    # 599开头：14位以599开头，本身即为BP码，无需去掉前导字符
-                    display = (code15[1:] if len(code15) == 15 else code15) + ng
+                    # 019开头：以0开头，去掉前导0得到14位BP码
+                    # 599开头：以599开头，本身即15位BP码，原样保留
+                    display = (code15[1:] if code15.startswith("0") else code15) + ng
                     valid.append((full_p, d, key, display))
         LogUtil.append(f"  │ 扫描完成，共发现 {len(valid)} 个候选数据文件夹")
         key_set = set()
@@ -483,13 +483,13 @@ class SingleTaskProcessor:
             bp_map = {}
             for idx, row in df_bp.iterrows():
                 code = str(row.iloc[bp_col_idx]).strip()
-                if re.fullmatch(r"\d{14}", code):
+                if re.fullmatch(r"\d{14,15}", code):
                     gz_val = str(row.iloc[gz_col_idx]).strip()
                     pos_val = str(row.iloc[pos_col_idx]).strip()
                     bp_map[code] = (gz_val, pos_val)
             LogUtil.append(f"  │ BP表有效映射数：{len(bp_map)} 条")
             if not bp_map:
-                LogUtil.append("  ℹ BP表中无有效的14位BP码，跳过回填")
+                LogUtil.append("  ℹ BP表中无有效的14/15位BP码，跳过回填")
                 return
             # 读取汇总表，只处理偶数行（从第2行开始，步长2）
             wb = load_workbook(excel_p)
@@ -500,20 +500,20 @@ class SingleTaskProcessor:
             max_row = ws.max_row
             for row in range(2, min(max_row, 12), 2):
                 a = str(ws[f"A{row}"].value).strip() if ws[f"A{row}"].value else ""
-                m = re.search(r"\d{14}", a)
+                m = re.search(r"\d{14,15}", a)
                 if m:
                     sample_codes.append(m.group())
             if sample_codes:
-                LogUtil.append(f"  │ 汇总表条码示例（偶数行前几个14位码）：{sample_codes[:5]}")
+                LogUtil.append(f"  │ 汇总表条码示例（偶数行前几个BP码）：{sample_codes[:5]}")
             # 实际回填
             for row in range(2, max_row + 1, 2):  # 只遍历偶数行
                 a = str(ws[f"A{row}"].value).strip() if ws[f"A{row}"].value else ""
-                m = re.search(r"\d{14}", a)
+                m = re.search(r"\d{14,15}", a)
                 if not m:
                     continue
-                bc14 = m.group()
-                if bc14 in bp_map:
-                    gz_val, pos_val = bp_map[bc14]
+                bc_code = m.group()
+                if bc_code in bp_map:
+                    gz_val, pos_val = bp_map[bc_code]
                     ws[f"L{row}"] = pos_val   # L列 = 模组位置（H列）
                     ws[f"M{row}"] = gz_val    # M列 = 工装编号（C列）
                     # 设置格式
