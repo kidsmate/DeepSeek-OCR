@@ -1205,6 +1205,268 @@ html, body {
   margin-bottom: 12px;
 }
 
+/* ===== Learning Detail Page ===== */
+.learn-subject-tag {
+  margin-bottom: 16px;
+}
+
+.learn-tabs {
+  display: flex;
+  gap: 8px;
+  background: var(--card);
+  padding: 6px;
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  margin-bottom: 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.learn-tab {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-light);
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.learn-tab.active {
+  background: var(--primary);
+  color: white;
+}
+
+.learn-section {
+  display: none;
+}
+
+.learn-section.active {
+  display: block;
+  animation: fadeIn 0.3s ease;
+}
+
+.learn-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.learn-section-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: var(--text);
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--bg);
+}
+
+.learn-text {
+  font-size: 15px;
+  line-height: 1.9;
+  color: var(--text);
+}
+
+.keypoint-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.keypoint-item:last-child {
+  border-bottom: none;
+}
+
+.kp-num {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.kp-text {
+  flex: 1;
+  font-size: 15px;
+  line-height: 1.7;
+  padding-top: 2px;
+}
+
+/* 教材内容 */
+.textbook-ref {
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.textbook-ref-name {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.textbook-ref-meta {
+  font-size: 12px;
+  color: var(--text-light);
+  margin-bottom: 10px;
+}
+
+.chapters-mini {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chapter-chip {
+  background: white;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+/* 教学视频 */
+.video-card {
+  background: linear-gradient(135deg, #F0EDFF, #FFF5F8);
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 16px;
+}
+
+.video-search {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.video-search-icon {
+  font-size: 40px;
+}
+
+.video-search-text {
+  flex: 1;
+}
+
+.video-tips {
+  background: #FFF8E1;
+  padding: 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.keyword-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.kw-tag {
+  background: white;
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 13px;
+  border: 1px solid #F39C12;
+  color: #F39C12;
+  font-weight: 500;
+}
+
+/* 习题 */
+.exercise-item {
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.ex-q {
+  font-size: 15px;
+  line-height: 1.7;
+  margin-bottom: 12px;
+}
+
+.ex-tag {
+  display: inline-block;
+  background: var(--primary);
+  color: white;
+  padding: 2px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.ex-answer {
+  background: #E8F8F3;
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.ex-ans-label {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.ex-ans-text {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+
+.ex-exp-label {
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.ex-exp-text {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-light);
+}
+
+.ex-toggle {
+  width: 100%;
+  text-align: center;
+}
+
+/* 底部操作栏 */
+.learn-action-bar {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 16px;
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  position: sticky;
+  bottom: 0;
+}
+
+.learn-action-bar button {
+  flex: 1;
+}
+
 /* ===== Responsive (iPad) ===== */
 @media (min-width: 768px) {
   .content {

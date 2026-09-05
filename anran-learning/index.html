@@ -115,6 +115,51 @@
         <div class="knowledge-list" id="knowledgeList"></div>
       </section>
 
+      <!-- ===== Learning Detail Page ===== -->
+      <section class="page" id="page-learn">
+        <div class="page-header">
+          <button class="back-btn" onclick="navigate('subject-detail')">‹ 返回</button>
+          <h1 id="learnTitle">知识点学习</h1>
+        </div>
+        <div class="learn-subject-tag" id="learnSubjectTag"></div>
+
+        <!-- Section Tabs -->
+        <div class="learn-tabs" id="learnTabs">
+          <button class="learn-tab active" data-section="summary">📝 知识总结</button>
+          <button class="learn-tab" data-section="keypoints">🔑 核心要点</button>
+          <button class="learn-tab" data-section="textbook">📖 教材内容</button>
+          <button class="learn-tab" data-section="video">🎬 教学视频</button>
+          <button class="learn-tab" data-section="exercise">✏️ 习题练习</button>
+        </div>
+
+        <!-- Section Contents -->
+        <div class="learn-section active" id="learn-section-summary">
+          <div class="learn-card" id="learnSummary"></div>
+        </div>
+
+        <div class="learn-section" id="learn-section-keypoints">
+          <div class="learn-card" id="learnKeyPoints"></div>
+        </div>
+
+        <div class="learn-section" id="learn-section-textbook">
+          <div class="learn-card" id="learnTextbook"></div>
+        </div>
+
+        <div class="learn-section" id="learn-section-video">
+          <div class="learn-card" id="learnVideo"></div>
+        </div>
+
+        <div class="learn-section" id="learn-section-exercise">
+          <div class="learn-card" id="learnExercise"></div>
+        </div>
+
+        <!-- Bottom Action Bar -->
+        <div class="learn-action-bar">
+          <button class="btn-secondary" onclick="navigate('subject-detail')">返回列表</button>
+          <button class="btn-primary" id="learnMarkBtn" onclick="markLearnedFromPage()">标记已学 (+5🪙)</button>
+        </div>
+      </section>
+
       <!-- ===== Rewards Page ===== -->
       <section class="page" id="page-rewards">
         <div class="page-header">
@@ -312,6 +357,7 @@
   <div class="toast" id="toast"></div>
 
   <script src="js/data.js"></script>
+  <script src="js/learning.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/app.js"></script>
   <script>

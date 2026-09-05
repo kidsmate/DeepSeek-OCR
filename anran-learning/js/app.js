@@ -237,36 +237,180 @@ function openSubject(subjectId) {
   navigate('subject-detail');
 }
 
-// ============ 知识点详情 ============
+// ============ 知识点详情（学习页）============
 function openKnowledge(subjectId, pointId) {
   const subj = SUBJECTS.find(s => s.id === subjectId);
   const point = subj.chapters.flatMap(c => c.points).find(p => p.id === pointId);
   if (!point) return;
   currentKnowledge = { subject: subj, point };
+  openLearnPage(subj, point);
+}
 
-  document.getElementById('kpTitle').textContent = point.title;
-  const isLearned = !!state.learnedPoints[point.id];
-  document.getElementById('kpBody').innerHTML = `
-    <div style="margin-bottom:12px;"><span class="badge" style="background:${hexToRgba(subj.color,0.12)};color:${subj.color};padding:4px 12px;border-radius:8px;font-size:13px;font-weight:600;">${subj.icon} ${subj.name}</span></div>
-    <p style="font-size:15px;line-height:1.8;color:var(--text);">${point.content}</p>
-    ${isLearned ? '<p style="margin-top:16px;color:var(--accent);font-weight:600;">✓ 已标记为已掌握</p>' : ''}
+function openLearnPage(subj, point) {
+  currentKnowledge = { subject: subj, point };
+  document.getElementById('learnTitle').textContent = point.title;
+  document.getElementById('learnSubjectTag').innerHTML =
+    `<span class="badge" style="background:${hexToRgba(subj.color,0.12)};color:${subj.color};padding:6px 14px;border-radius:8px;font-size:14px;font-weight:600;">${subj.icon} ${subj.name}</span>`;
+
+  const content = LEARNING_CONTENT[point.id] || {};
+
+  // 知识总结
+  document.getElementById('learnSummary').innerHTML = `
+    <div class="learn-section-title">📝 知识总结</div>
+    <p class="learn-text">${content.summary || point.content || '暂无总结内容'}</p>
   `;
-  const btn = document.getElementById('btnMarkLearned');
+
+  // 核心要点
+  const kps = content.keyPoints || [];
+  document.getElementById('learnKeyPoints').innerHTML = `
+    <div class="learn-section-title">🔑 核心要点</div>
+    ${kps.length ? kps.map((k, i) => `
+      <div class="keypoint-item">
+        <div class="kp-num">${i+1}</div>
+        <div class="kp-text">${k}</div>
+      </div>
+    `).join('') : '<p class="learn-text">暂无核心要点</p>'}
+  `;
+
+  // 教材内容（从上传的 PDF 关联）
+  renderLearnTextbook(subj, point);
+
+  // 教学视频
+  renderLearnVideo(content.videoKeywords || point.title);
+
+  // 习题练习
+  const exs = content.exercises || [];
+  document.getElementById('learnExercise').innerHTML = `
+    <div class="learn-section-title">✏️ 习题练习</div>
+    ${exs.length ? exs.map((e, i) => `
+      <div class="exercise-item" id="ex-${i}">
+        <div class="ex-q"><span class="ex-tag">第${i+1}题</span>${e.q}</div>
+        <div class="ex-answer" id="ex-ans-${i}" style="display:none;">
+          <div class="ex-ans-label">参考答案</div>
+          <div class="ex-ans-text">${e.a}</div>
+          <div class="ex-exp-label">解析</div>
+          <div class="ex-exp-text">${e.e}</div>
+        </div>
+        <button class="btn-secondary ex-toggle" onclick="toggleAnswer(${i})" id="ex-btn-${i}">查看答案与解析</button>
+      </div>
+    `).join('') : '<p class="learn-text">暂无习题</p>'}
+  `;
+
+  // 标记已学按钮状态
+  const isLearned = !!state.learnedPoints[point.id];
+  const btn = document.getElementById('learnMarkBtn');
   if (isLearned) {
-    btn.textContent = '取消标记';
+    btn.textContent = '取消标记 (-5🪙)';
     btn.style.background = 'var(--danger)';
   } else {
     btn.textContent = '标记已学 (+5🪙)';
     btn.style.background = 'var(--accent)';
   }
-  document.getElementById('knowledgeModal').classList.add('show');
+
+  // 默认显示第一个 tab
+  switchLearnSection('summary');
+  document.querySelectorAll('.learn-tab').forEach(t => t.classList.toggle('active', t.dataset.section === 'summary'));
+
+  navigate('learn');
+}
+
+function renderLearnTextbook(subj, point) {
+  // 查找该学科上传的教材
+  const textbooks = state.textbooks.filter(t => t.subject === subj.name || t.subject === '');
+  const container = document.getElementById('learnTextbook');
+  
+  if (textbooks.length === 0) {
+    container.innerHTML = `
+      <div class="learn-section-title">📖 教材内容</div>
+      <div class="empty-state">
+        <div class="empty-icon">📚</div>
+        <p>尚未上传 ${subj.name} 教材</p>
+        <p style="font-size:13px;margin-top:8px;">前往"教材"页面上传人教版${subj.name}教材 PDF，系统将自动提取相关章节内容</p>
+      </div>
+    `;
+    return;
+  }
+
+  let html = `<div class="learn-section-title">📖 教材内容（关联 ${subj.name} 教材）</div>`;
+  textbooks.forEach(t => {
+    const chapters = t.chapters || [];
+    html += `
+      <div class="textbook-ref">
+        <div class="textbook-ref-name">📄 ${t.name}</div>
+        <div class="textbook-ref-meta">上传于 ${formatTime(t.uploadTime)} · ${chapters.length}个章节</div>
+        ${chapters.length ? '<div class="chapters-mini">' + chapters.slice(0, 15).map((c, i) => `<span class="chapter-chip">${i+1}. ${c}</span>`).join('') + '</div>' : '<p style="color:var(--text-light);font-size:13px;">未提取到章节</p>'}
+        <button class="btn-secondary" style="margin-top:10px;" onclick="viewTextbook('${t.id}')">查看完整教材内容</button>
+      </div>
+    `;
+  });
+  container.innerHTML = html;
+}
+
+function renderLearnVideo(keywords) {
+  const encoded = encodeURIComponent(keywords);
+  const bilibiliUrl = `https://search.bilibili.com/all?keyword=${encoded}`;
+  document.getElementById('learnVideo').innerHTML = `
+    <div class="learn-section-title">🎬 教学视频</div>
+    <div class="video-card">
+      <div class="video-search">
+        <div class="video-search-icon">🔍</div>
+        <div class="video-search-text">
+          <div style="font-weight:600;margin-bottom:4px;">在 B 站搜索教学视频</div>
+          <div style="font-size:13px;color:var(--text-light);">关键词：${keywords}</div>
+        </div>
+        <a href="${bilibiliUrl}" target="_blank" class="btn-primary" style="text-decoration:none;">去搜索</a>
+      </div>
+    </div>
+    <div class="video-tips">
+      <p>💡 建议在 B 站搜索以下关键词组合：</p>
+      <div class="keyword-tags">
+        <span class="kw-tag">${keywords}</span>
+        <span class="kw-tag">${keywords} 人教版</span>
+        <span class="kw-tag">${keywords} 初中</span>
+        <span class="kw-tag">${keywords} 讲解</span>
+      </div>
+      <p style="margin-top:12px;font-size:13px;color:var(--text-light);">点击上方"去搜索"按钮，将跳转至 B 站搜索相关教学视频。选择播放量高、评价好的视频观看学习效果更佳。</p>
+    </div>
+  `;
+}
+
+function switchLearnSection(section) {
+  document.querySelectorAll('.learn-section').forEach(s => s.classList.remove('active'));
+  document.getElementById('learn-section-' + section).classList.add('active');
+  document.querySelectorAll('.learn-tab').forEach(t => t.classList.toggle('active', t.dataset.section === section));
+}
+
+function toggleAnswer(index) {
+  const ans = document.getElementById('ex-ans-' + index);
+  const btn = document.getElementById('ex-btn-' + index);
+  if (ans.style.display === 'none') {
+    ans.style.display = 'block';
+    btn.textContent = '收起答案';
+  } else {
+    ans.style.display = 'none';
+    btn.textContent = '查看答案与解析';
+  }
+}
+
+function markLearnedFromPage() {
+  if (!currentKnowledge) return;
+  markLearned();
+  // 重新渲染按钮
+  const isLearned = !!state.learnedPoints[currentKnowledge.point.id];
+  const btn = document.getElementById('learnMarkBtn');
+  if (isLearned) {
+    btn.textContent = '取消标记 (-5🪙)';
+    btn.style.background = 'var(--danger)';
+  } else {
+    btn.textContent = '标记已学 (+5🪙)';
+    btn.style.background = 'var(--accent)';
+  }
 }
 
 function markLearned() {
   if (!currentKnowledge) return;
   const { point } = currentKnowledge;
   if (state.learnedPoints[point.id]) {
-    // 取消
     delete state.learnedPoints[point.id];
     state.points = Math.max(0, state.points - 5);
     addRecord(state, 'punish', `取消学习：${point.title}`, -5);
@@ -276,17 +420,14 @@ function markLearned() {
     state.points += 5;
     addRecord(state, 'learn', `学习：${point.title}`, 5);
     showToast('🎉 学习完成！+5积分');
-
-    // 检查每日目标
     if (isDailyGoalDone(state)) {
       state.points += 10;
       addRecord(state, 'reward', '完成每日目标', 10);
       setTimeout(() => showToast('🎯 完成每日目标！额外+10积分'), 600);
     }
   }
-  closeModal();
   saveData(state);
-  renderAll();
+  updateTopBar();
   if (currentSubject) openSubject(currentSubject.id);
 }
 
@@ -668,6 +809,11 @@ function setupEventListeners() {
 
   // 标记已学
   document.getElementById('btnMarkLearned').addEventListener('click', markLearned);
+
+  // 学习页 tab 切换
+  document.querySelectorAll('.learn-tab').forEach(tab => {
+    tab.addEventListener('click', () => switchLearnSection(tab.dataset.section));
+  });
 
   // 奖励标签切换
   document.querySelectorAll('.tab-btn').forEach(btn => {
