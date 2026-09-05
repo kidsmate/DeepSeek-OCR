@@ -325,25 +325,133 @@ function renderLearnTextbook(subj, point) {
       <div class="empty-state">
         <div class="empty-icon">📚</div>
         <p>尚未上传 ${subj.name} 教材</p>
-        <p style="font-size:13px;margin-top:8px;">前往"教材"页面上传人教版${subj.name}教材 PDF，系统将自动提取相关章节内容</p>
+        <p style="font-size:13px;margin-top:8px;">前往"教材"页面上传人教版${subj.name}教材 PDF，系统将自动提取章节正文</p>
       </div>
     `;
     return;
   }
 
-  let html = `<div class="learn-section-title">📖 教材内容（关联 ${subj.name} 教材）</div>`;
-  textbooks.forEach(t => {
+  // 尝试匹配当前知识点对应的章节
+  const matchedIdx = findRelevantSection(textbooks[0], point);
+
+  let html = `<div class="learn-section-title">📖 教材内容（${subj.name}）</div>`;
+  
+  textbooks.forEach((t, ti) => {
+    const sections = t.sections || [];
     const chapters = t.chapters || [];
+    
     html += `
       <div class="textbook-ref">
         <div class="textbook-ref-name">📄 ${t.name}</div>
-        <div class="textbook-ref-meta">上传于 ${formatTime(t.uploadTime)} · ${chapters.length}个章节</div>
-        ${chapters.length ? '<div class="chapters-mini">' + chapters.slice(0, 15).map((c, i) => `<span class="chapter-chip">${i+1}. ${c}</span>`).join('') + '</div>' : '<p style="color:var(--text-light);font-size:13px;">未提取到章节</p>'}
-        <button class="btn-secondary" style="margin-top:10px;" onclick="viewTextbook('${t.id}')">查看完整教材内容</button>
-      </div>
+        <div class="textbook-ref-meta">上传于 ${formatTime(t.uploadTime)} · ${sections.length} 个章节</div>
     `;
+
+    if (sections.length === 0) {
+      // 旧版教材数据，没有正文
+      html += `
+        <div class="textbook-old-notice">
+          ⚠️ 该教材为旧版数据，未保存正文内容。请删除后重新上传以查看完整教材正文。
+        </div>
+        ${chapters.length ? '<div class="chapters-mini">' + chapters.slice(0, 15).map((c, i) => `<span class="chapter-chip">${i+1}. ${c}</span>`).join('') + '</div>' : ''}
+      `;
+    } else {
+      // 展开/收起全部按钮
+      html += `
+        <div class="tb-action-bar">
+          <button class="btn-secondary btn-sm" onclick="toggleAllSections(${ti}, true)">展开全部</button>
+          <button class="btn-secondary btn-sm" onclick="toggleAllSections(${ti}, false)">收起全部</button>
+          ${matchedIdx >= 0 ? `<span class="tb-match-tip">💡 已为你定位到「${sections[matchedIdx].title.substring(0, 20)}」</span>` : ''}
+        </div>
+        <div class="tb-sections" id="tb-sections-${ti}">
+      `;
+      sections.forEach((sec, i) => {
+        const isMatched = (ti === 0 && i === matchedIdx);
+        const isOpen = isMatched || i === 0;
+        const contentHtml = formatTextbookContent(sec.content);
+        html += `
+          <div class="tb-section ${isMatched ? 'matched' : ''}" id="tb-sec-${ti}-${i}">
+            <div class="tb-section-head" onclick="toggleTbSection(${ti}, ${i})">
+              <span class="tb-sec-index">第 ${i+1} 节</span>
+              <span class="tb-sec-title">${sec.title}</span>
+              <span class="tb-sec-arrow ${isOpen ? 'open' : ''}">▼</span>
+            </div>
+            <div class="tb-section-body" style="display:${isOpen ? 'block' : 'none'};">
+              ${contentHtml}
+            </div>
+          </div>
+        `;
+      });
+      html += `</div>`;
+    }
+    
+    html += `</div>`;
   });
+  
   container.innerHTML = html;
+}
+
+// 根据知识点匹配教材中的相关章节（关键词重叠度）
+function findRelevantSection(textbook, point) {
+  if (!textbook.sections || textbook.sections.length === 0) return -1;
+  // 停用词（常见无意义单字）
+  const stopwords = new Set(['的','了','是','在','和','与','或','等','中','上','下','不','也','都','就','及','之','其','此','个','一','二','三','为','有','我','你','他','她','它','这','那','被','把','让','使','从','到','向','对','于']);
+  // 提取知识点标题中的有效关键词（单字也保留，但过滤停用词）
+  const pointText = point.title + ' ' + (point.content || '');
+  const tokens = pointText.match(/[\u4e00-\u9fa5A-Za-z0-9]+/g) || [];
+  const kwSet = new Set();
+  tokens.forEach(t => {
+    if (t.length >= 2) kwSet.add(t);
+    else if (t.length === 1 && !stopwords.has(t)) kwSet.add(t);
+  });
+  let bestIdx = -1;
+  let bestScore = 0;
+  textbook.sections.forEach((sec, i) => {
+    const titleText = sec.title;
+    const bodyText = sec.content.substring(0, 500);
+    let score = 0;
+    kwSet.forEach(k => {
+      if (titleText.includes(k)) score += (k.length >= 2 ? 3 : 1);  // 标题匹配
+      else if (bodyText.includes(k)) score += (k.length >= 2 ? 1 : 0); // 正文匹配（单字不计）
+    });
+    if (score > bestScore) { bestScore = score; bestIdx = i; }
+  });
+  return bestScore >= 1 ? bestIdx : -1;
+}
+
+// 格式化教材正文（简单换行和段落处理）
+function formatTextbookContent(text) {
+  if (!text) return '<p style="color:var(--text-light);">暂无内容</p>';
+  // 按换行符分段，过滤空行
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  if (lines.length === 0) return '<p style="color:var(--text-light);">暂无内容</p>';
+  return lines.map(l => `<p class="tb-paragraph">${escapeHtml(l)}</p>`).join('');
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// 展开/收起单个章节
+function toggleTbSection(ti, i) {
+  const sec = document.getElementById(`tb-sec-${ti}-${i}`);
+  if (!sec) return;
+  const body = sec.querySelector('.tb-section-body');
+  const arrow = sec.querySelector('.tb-sec-arrow');
+  const isOpen = body.style.display === 'block';
+  body.style.display = isOpen ? 'none' : 'block';
+  arrow.classList.toggle('open', !isOpen);
+}
+
+// 展开/收起全部章节
+function toggleAllSections(ti, open) {
+  const container = document.getElementById(`tb-sections-${ti}`);
+  if (!container) return;
+  const bodies = container.querySelectorAll('.tb-section-body');
+  const arrows = container.querySelectorAll('.tb-sec-arrow');
+  bodies.forEach(b => b.style.display = open ? 'block' : 'none');
+  arrows.forEach(a => a.classList.toggle('open', open));
 }
 
 function renderLearnVideo(keywords) {
@@ -577,19 +685,53 @@ function renderTextbooks() {
       <div class="textbook-icon">📄</div>
       <div class="textbook-info">
         <div class="textbook-name">${t.name}</div>
-        <div class="textbook-meta">${t.subject || '未分类'} · ${t.chapters ? t.chapters.length : 0}个章节 · ${formatSize(t.size)} · ${formatTime(t.uploadTime)}</div>
+        <div class="textbook-meta">${t.subject || '未分类'} · ${(t.sections && t.sections.length) || (t.chapters && t.chapters.length) || 0}个章节${t.sections && t.sections.length ? '（含正文）' : ''} · ${formatSize(t.size)} · ${formatTime(t.uploadTime)}</div>
       </div>
       <button class="textbook-action" onclick="viewTextbook('${t.id}')">查看</button>
+      <button class="textbook-action text-danger" onclick="deleteTextbook('${t.id}')">删除</button>
     </div>
   `).join('');
+}
+
+function deleteTextbook(id) {
+  if (!confirm('确定删除该教材吗？删除后无法恢复。')) return;
+  state.textbooks = state.textbooks.filter(t => t.id !== id);
+  saveData(state);
+  renderTextbooks();
+  showToast('教材已删除');
 }
 
 function viewTextbook(id) {
   const t = state.textbooks.find(x => x.id === id);
   if (!t) return;
-  let html = `<h3 style="margin-bottom:12px;">${t.name}</h3>`;
-  if (t.chapters && t.chapters.length) {
-    html += '<div class="section-title">提取的章节</div>';
+  const sections = t.sections || [];
+  let html = `<h3 style="margin-bottom:8px;">${t.name}</h3>
+    <div style="color:var(--text-light);font-size:13px;margin-bottom:16px;">${t.subject || '未分类'} · ${sections.length} 个章节 · ${formatSize(t.size)} · ${formatTime(t.uploadTime)}</div>`;
+  
+  if (sections.length > 0) {
+    html += `<div class="tb-action-bar" style="margin-bottom:12px;">
+      <button class="btn-secondary btn-sm" onclick="toggleAllModalSections(true)">展开全部</button>
+      <button class="btn-secondary btn-sm" onclick="toggleAllModalSections(false)">收起全部</button>
+    </div>`;
+    html += '<div id="modal-tb-sections">';
+    sections.forEach((sec, i) => {
+      const isOpen = i === 0;
+      html += `
+        <div class="tb-section" id="modal-tb-sec-${i}">
+          <div class="tb-section-head" onclick="toggleModalTbSection(${i})">
+            <span class="tb-sec-index">第 ${i+1} 节</span>
+            <span class="tb-sec-title">${sec.title}</span>
+            <span class="tb-sec-arrow ${isOpen ? 'open' : ''}">▼</span>
+          </div>
+          <div class="tb-section-body" style="display:${isOpen ? 'block' : 'none'};">
+            ${formatTextbookContent(sec.content)}
+          </div>
+        </div>
+      `;
+    });
+    html += '</div>';
+  } else if (t.chapters && t.chapters.length) {
+    html += '<div class="section-title">提取的章节（旧版数据，无正文）</div>';
     html += t.chapters.map((c, i) => `
       <div class="pdf-chapter-item">
         <span class="chap-num">${i+1}</span>
@@ -603,6 +745,23 @@ function viewTextbook(id) {
   document.getElementById('kpBody').innerHTML = html;
   document.getElementById('btnMarkLearned').style.display = 'none';
   document.getElementById('knowledgeModal').classList.add('show');
+}
+
+function toggleModalTbSection(i) {
+  const sec = document.getElementById(`modal-tb-sec-${i}`);
+  if (!sec) return;
+  const body = sec.querySelector('.tb-section-body');
+  const arrow = sec.querySelector('.tb-sec-arrow');
+  const isOpen = body.style.display === 'block';
+  body.style.display = isOpen ? 'none' : 'block';
+  arrow.classList.toggle('open', !isOpen);
+}
+
+function toggleAllModalSections(open) {
+  const container = document.getElementById('modal-tb-sections');
+  if (!container) return;
+  container.querySelectorAll('.tb-section-body').forEach(b => b.style.display = open ? 'block' : 'none');
+  container.querySelectorAll('.tb-sec-arrow').forEach(a => a.classList.toggle('open', open));
 }
 
 // PDF 处理
@@ -635,11 +794,14 @@ function handlePdfUpload(file) {
         document.getElementById('pdfProgressFill').style.width = (40 + (i / pdf.numPages) * 50) + '%';
       }
 
-      // 提取章节标题（匹配"第X章/第X单元/第X课"等模式）
+      // 提取章节标题和正文（匹配"第X章/第X单元/第X课"等模式）
       const chapters = extractChapters(fullText);
+      const sections = extractSections(fullText);
       currentPdfData.chapters = chapters;
+      currentPdfData.sections = sections;
+      currentPdfData.fullText = fullText;
 
-      document.getElementById('pdfStatus').textContent = `提取完成！识别到 ${chapters.length} 个章节`;
+      document.getElementById('pdfStatus').textContent = `提取完成！识别到 ${sections.length} 个章节（含正文）`;
       document.getElementById('pdfProgressFill').style.width = '100%';
 
       if (chapters.length > 0) {
@@ -682,6 +844,63 @@ function extractChapters(text) {
   return Array.from(found).slice(0, 50);
 }
 
+// 从文本中提取章节及其正文内容
+function extractSections(text) {
+  // 匹配章节标题的正则（第X章/单元/课/节）
+  const headingRegex = /第[一二三四五六七八九十百零\d]+(?:章|单元|课|节)[^\n]*/g;
+  const matches = [];
+  let m;
+  while ((m = headingRegex.exec(text)) !== null) {
+    const title = m[0].trim().substring(0, 60);
+    if (title.length > 3) {
+      matches.push({ index: m.index, title });
+    }
+  }
+  // 按出现位置排序
+  matches.sort((a, b) => a.index - b.index);
+  // 去重（同一位置的标题只保留一个）
+  const unique = [];
+  const seenIdx = new Set();
+  for (const h of matches) {
+    if (!seenIdx.has(h.index)) {
+      seenIdx.add(h.index);
+      unique.push(h);
+    }
+  }
+  // 提取每个章节的正文
+  const sections = [];
+  for (let i = 0; i < unique.length; i++) {
+    const start = unique[i].index;
+    const end = i + 1 < unique.length ? unique[i + 1].index : text.length;
+    const content = text.substring(start, end).trim();
+    if (content.length > 20) {
+      sections.push({ title: unique[i].title, content });
+    }
+  }
+  // 如果没有匹配到章节标题，尝试按"一、""1."等序号切分
+  if (sections.length === 0) {
+    const subRegex = /^[一二三四五六七八九十]+[、.．][^\n]*$/gm;
+    const subMatches = [];
+    let sm;
+    while ((sm = subRegex.exec(text)) !== null) {
+      const title = sm[0].trim().substring(0, 60);
+      if (title.length > 2) {
+        subMatches.push({ index: sm.index, title });
+      }
+    }
+    subMatches.sort((a, b) => a.index - b.index);
+    for (let i = 0; i < subMatches.length; i++) {
+      const start = subMatches[i].index;
+      const end = i + 1 < subMatches.length ? subMatches[i + 1].index : text.length;
+      const content = text.substring(start, end).trim();
+      if (content.length > 20) {
+        sections.push({ title: subMatches[i].title, content });
+      }
+    }
+  }
+  return sections;
+}
+
 function closePdfModal() {
   document.getElementById('pdfModal').classList.remove('show');
   currentPdfData = null;
@@ -691,14 +910,20 @@ function saveTextbook() {
   if (!currentPdfData) return;
   // 尝试匹配学科
   const subject = guessSubject(currentPdfData.name);
-  state.textbooks.unshift({
+  const textbook = {
     id: 't' + Date.now(),
     name: currentPdfData.name,
     subject: subject,
     size: currentPdfData.size,
     uploadTime: Date.now(),
-    chapters: currentPdfData.chapters
-  });
+    chapters: currentPdfData.chapters || [],
+    sections: currentPdfData.sections || [],
+  };
+  // 如果没有提取到章节，则把全文作为一个章节保存
+  if (textbook.sections.length === 0 && currentPdfData.fullText) {
+    textbook.sections = [{ title: '教材全文', content: currentPdfData.fullText }];
+  }
+  state.textbooks.unshift(textbook);
   saveData(state);
   renderTextbooks();
   closePdfModal();
