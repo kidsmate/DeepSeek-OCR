@@ -1045,46 +1045,42 @@ function handlePdfUpload(file) {
       const sections = extractSections(fullText);
       const units = extractUnits(fullText);
 
-      // 为每个课文计算起始页码（逐页搜索，跳过目录页）
-      // 1. 先识别目录页：包含"目录"字样的页面
+      // 为每个课文计算起始页码
+      // 策略1（首选）：直接从目录条目的末尾提取页码（如 "2 周总理，你在哪里 / 柯岩 5" → 5）
+      // 策略2（兜底）：逐页搜索课文标题，跳过目录页
       const tocPages = new Set();
       for (let p = 0; p < pageTexts.length; p++) {
         if (pageTexts[p].includes('目录')) tocPages.add(p);
       }
-      // 归一化函数：去掉标点和空格，提高匹配容错
       const norm = s => s.replace(/[，。、；：！？""''（）《》\s,.;:!?'"'()<>*]/g, '');
 
       units.forEach(u => {
         u.lessons.forEach(l => {
-          // 清洗标题：去掉前导课号(数字/第X课)、尾随作者(/ 作者)和页码
-          let coreTitle = l.title
-            .replace(/^\d+\*?\s*/, '')              // "2 " 或 "3* "
-            .replace(/^第[一二三四五六七八九十百零\d]+课\s*/, '')  // "第X课"
-            .replace(/\s*\/\s*[\u4e00-\u9fa5·]+.*$/, '')  // "/ 柯岩" 等作者
-            .replace(/\s+\d+\s*$/, '')              // 尾随页码
-            .trim();
-          const normTitle = norm(coreTitle);
-          if (!normTitle) { l.startPage = 1; return; }
+          // 策略1：提取标题末尾的页码（目录格式：课号 标题 / 作者 页码）
+          const pageMatch = l.title.match(/\s(\d{1,4})\s*$/);
+          let startPage = pageMatch ? parseInt(pageMatch[1], 10) : 0;
 
-          // 逐页搜索：跳过目录页，找第一个包含课文标题的页面
-          let foundPage = -1;
-          for (let p = 0; p < pageTexts.length; p++) {
-            if (tocPages.has(p)) continue;
-            if (norm(pageTexts[p]).includes(normTitle)) {
-              foundPage = p + 1;
-              break;
-            }
-          }
-          // 兜底：如果非目录页没找到，退而用全文最后一次出现的位置（避免停在目录）
-          if (foundPage < 0) {
-            const lastIdx = fullText.lastIndexOf(l.title);
-            if (lastIdx >= 0) {
-              for (let p = pageStartOffsets.length - 1; p >= 0; p--) {
-                if (lastIdx >= pageStartOffsets[p]) { foundPage = p + 1; break; }
+          // 验证页码合理性：必须在 PDF 总页数范围内
+          if (startPage < 1 || startPage > pageTexts.length) {
+            // 策略2：逐页搜索课文标题（跳过目录页）
+            let coreTitle = l.title
+              .replace(/^\d+\*?\s*/, '')
+              .replace(/^第[一二三四五六七八九十百零\d]+课\s*/, '')
+              .replace(/\s*\/\s*[\u4e00-\u9fa5·]+.*$/, '')
+              .replace(/\s+\d+\s*$/, '')
+              .trim();
+            const normTitle = norm(coreTitle);
+            if (normTitle) {
+              for (let p = 0; p < pageTexts.length; p++) {
+                if (tocPages.has(p)) continue;
+                if (norm(pageTexts[p]).includes(normTitle)) {
+                  startPage = p + 1;
+                  break;
+                }
               }
             }
           }
-          l.startPage = foundPage > 0 ? foundPage : 1;
+          l.startPage = startPage > 0 ? startPage : 1;
         });
       });
 
