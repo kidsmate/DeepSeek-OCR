@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="icon" href="icons/icon-192.png">
   <title>安冉的学习助手</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=20260906">
   <!-- PDF.js for textbook PDF processing -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
@@ -356,13 +356,27 @@
   <!-- Toast -->
   <div class="toast" id="toast"></div>
 
-  <script src="js/data.js"></script>
-  <script src="js/learning.js"></script>
-  <script src="js/storage.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/data.js?v=20260906"></script>
+  <script src="js/learning.js?v=20260906"></script>
+  <script src="js/storage.js?v=20260906"></script>
+  <script src="js/app.js?v=20260906"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+      navigator.serviceWorker.register('sw.js?v=20260906').then(reg => {
+        // 检查是否有新版本的 Service Worker
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // 有新版本，立即激活并刷新
+              newWorker.postMessage({ action: 'skipWaiting' });
+              location.reload();
+            }
+          });
+        });
+        // 每次加载都检查更新
+        reg.update();
+      }).catch(() => {});
     }
   </script>
 </body>
