@@ -1463,28 +1463,43 @@ html, body {
 }
 
 .book-unit {
-  margin-bottom: 40px;
+  margin-bottom: 56px;
+  padding-bottom: 40px;
+  border-bottom: 3px dashed var(--border);
 }
 
 .book-unit:last-child {
   margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 .book-unit-title {
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 800;
-  color: var(--primary);
+  color: white;
   text-align: center;
-  padding: 16px 0;
-  margin-bottom: 24px;
-  border-top: 3px double var(--primary-light);
-  border-bottom: 3px double var(--primary-light);
-  letter-spacing: 4px;
+  padding: 18px 0;
+  margin-bottom: 8px;
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
+  border-radius: 12px;
+  letter-spacing: 6px;
+  box-shadow: 0 4px 16px rgba(108, 92, 231, 0.3);
+}
+
+.book-unit-divider {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--primary-light), transparent);
+  margin-bottom: 32px;
 }
 
 .book-lesson {
-  margin-bottom: 36px;
-  scroll-margin-top: 120px;
+  margin-bottom: 40px;
+  scroll-margin-top: 140px;
+  padding: 20px 24px;
+  background: #FAFAFC;
+  border-radius: 12px;
+  border-left: 4px solid var(--primary-light);
 }
 
 .book-lesson:last-child {
@@ -1492,14 +1507,14 @@ html, body {
 }
 
 .book-lesson-title {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  color: var(--text);
+  color: var(--primary-dark);
   text-align: center;
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-  letter-spacing: 2px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 2px solid var(--primary-light);
+  letter-spacing: 3px;
 }
 
 .book-lesson-content {
@@ -1508,10 +1523,10 @@ html, body {
 }
 
 .tb-paragraph {
-  font-size: 15px;
+  font-size: 16px;
   line-height: 2;
   color: var(--text);
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   text-indent: 2em;
   text-align: justify;
 }

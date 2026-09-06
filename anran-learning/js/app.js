@@ -369,14 +369,13 @@ function renderLearnTextbook(subj, point) {
 // 渲染书本式阅读器：顶部目录 + 纵向课文
 function renderBookReader(units, ti, point) {
   let html = '';
-  let lessonIdx = 0;
 
   // 找到匹配的课文锚点
   let matchedAnchor = '';
 
   // 顶部粘性目录
   html += `<div class="book-toc-bar" id="book-toc-${ti}">`;
-  html += `<div class="book-toc-label">📑 目录</div>`;
+  html += `<div class="book-toc-label">📑 目录（点击课文标题跳转）</div>`;
   html += `<div class="book-toc-links">`;
   units.forEach((u, ui) => {
     html += `<div class="book-toc-unit">${escapeHtml(u.title)}</div>`;
@@ -384,8 +383,7 @@ function renderBookReader(units, ti, point) {
       const anchor = `book-${ti}-u${ui}-l${li}`;
       const matched = point && (l.title.includes(point.title) || point.title.includes(l.title.substring(0, 2)) || findRelevantSection({sections:[{title:l.title,content:l.content}]}, point) === 0);
       if (matched) matchedAnchor = anchor;
-      html += `<a class="book-toc-link ${matched ? 'matched' : ''}" href="#${anchor}">${escapeHtml(l.title)}</a>`;
-      lessonIdx++;
+      html += `<a class="book-toc-link ${matched ? 'matched' : ''}" onclick="scrollToLesson('${anchor}')">${escapeHtml(l.title)}</a>`;
     });
   });
   html += `</div></div>`;
@@ -397,8 +395,9 @@ function renderBookReader(units, ti, point) {
   // 主体：纵向排列所有单元和课文
   html += `<div class="book-body">`;
   units.forEach((u, ui) => {
-    html += `<div class="book-unit" id="book-${ti}-u${ui}">`;
+    html += `<section class="book-unit" id="book-${ti}-u${ui}">`;
     html += `<h2 class="book-unit-title">${escapeHtml(u.title)}</h2>`;
+    html += `<div class="book-unit-divider"></div>`;
     u.lessons.forEach((l, li) => {
       const anchor = `book-${ti}-u${ui}-l${li}`;
       html += `<article class="book-lesson" id="${anchor}">`;
@@ -406,16 +405,33 @@ function renderBookReader(units, ti, point) {
       html += `<div class="book-lesson-content">${formatTextbookContent(l.content)}</div>`;
       html += `</article>`;
     });
-    html += `</div>`;
+    html += `</section>`;
   });
   html += `</div>`;
 
   // 如果有匹配课文，渲染后滚动到该位置
   if (matchedAnchor) {
-    html += `<script>setTimeout(()=>{var el=document.getElementById('${matchedAnchor}');if(el)el.scrollIntoView({behavior:'smooth',block:'start'});},300);</script>`;
+    html += `<script>setTimeout(()=>{scrollToLesson('${matchedAnchor}');},400);</script>`;
   }
 
   return html;
+}
+
+// 跳转到指定课文（在滚动容器内定位）
+function scrollToLesson(anchorId) {
+  const el = document.getElementById(anchorId);
+  if (!el) return;
+  // 找到最近的可滚动祖先容器
+  let scrollParent = el.parentElement;
+  while (scrollParent && getComputedStyle(scrollParent).overflowY !== 'auto' && getComputedStyle(scrollParent).overflowY !== 'scroll') {
+    scrollParent = scrollParent.parentElement;
+  }
+  if (scrollParent) {
+    const top = el.offsetTop - scrollParent.offsetTop - 20;
+    scrollParent.scrollTo({ top, behavior: 'smooth' });
+  } else {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 
 // 根据知识点匹配教材中的相关章节（关键词重叠度）
@@ -898,24 +914,35 @@ function extractSections(text) {
 
 // 按"单元"组织教材内容，返回 [{title, lessons:[{title,content}]}]
 function extractUnits(text) {
-  // 1. 匹配所有标题：单元、课、章、节
-  const headingRegex = /第[一二三四五六七八九十百零\d]+(?:单元|课|章|节)[^\n]*/g;
+  // 1. 匹配所有标题：单元、章、节（单元级）、课（课文级）
+  // 单元/章/节 作为大单元，课作为课文
+  const unitRegex = /第[一二三四五六七八九十百零\d]+(?:单元|章|节)[^\n]*/g;
+  const lessonRegex = /第[一二三四五六七八九十百零\d]+课[^\n]*/g;
+
   const headings = [];
-  let hm;
-  while ((hm = headingRegex.exec(text)) !== null) {
-    const title = hm[0].trim().substring(0, 60);
-    if (title.length > 3) headings.push({ index: hm.index, title, type: hm[0].includes('单元') ? 'unit' : 'lesson' });
+  let um;
+  while ((um = unitRegex.exec(text)) !== null) {
+    const title = um[0].trim().substring(0, 60);
+    if (title.length > 2) headings.push({ index: um.index, title, type: 'unit' });
+  }
+  let lm;
+  while ((lm = lessonRegex.exec(text)) !== null) {
+    const title = lm[0].trim().substring(0, 60);
+    if (title.length > 2) headings.push({ index: lm.index, title, type: 'lesson' });
   }
   headings.sort((a, b) => a.index - b.index);
 
-  // 去重
+  // 去重（同一位置只保留一个，优先 unit）
   const unique = [];
   const seenIdx = new Set();
   for (const h of headings) {
-    if (!seenIdx.has(h.index)) { seenIdx.add(h.index); unique.push(h); }
+    if (!seenIdx.has(h.index)) {
+      seenIdx.add(h.index);
+      unique.push(h);
+    }
   }
 
-  // 2. 如果有"单元"，按单元分组；否则全部归入一个默认单元
+  // 2. 如果有单元级标题，按单元分组；否则全部归入一个默认单元
   const hasUnit = unique.some(h => h.type === 'unit');
   const units = [];
 
@@ -934,7 +961,7 @@ function extractUnits(text) {
       }
     }
   } else {
-    // 没有单元，尝试识别"课"或序号标题，全部归入"教材内容"
+    // 没有单元/章/节，尝试识别"课"或序号标题，全部归入"教材内容"
     const curUnit = { title: '教材内容', lessons: [] };
     for (let i = 0; i < unique.length; i++) {
       const h = unique[i];
@@ -963,7 +990,6 @@ function extractUnits(text) {
     }
   }
 
-  // 过滤掉空单元
   return units.filter(u => u.lessons.length > 0);
 }
 
