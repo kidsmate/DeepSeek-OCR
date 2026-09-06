@@ -997,17 +997,37 @@ function handlePdfUpload(file) {
       const pdf = await pdfjsLib.getDocument({ data }).promise;
       document.getElementById('pdfStatus').textContent = `共 ${pdf.numPages} 页，正在提取文本...`;
 
-      // 按页提取文本，同时记录每页在全文中的起始字符位置
+      // 按页提取文本，按行组织（根据 y 坐标分行），同时记录每页在全文中的起始字符位置
       const pageTexts = [];
       let fullText = '';
       const pageStartOffsets = [];
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        const text = textContent.items.map(it => it.str).join(' ');
+        // 按 y 坐标分行（误差 2px 内视为同一行）
+        const lines = [];
+        const yMap = {};
+        for (const item of textContent.items) {
+          const y = Math.round(item.transform[5]);
+          let lineKey = y;
+          // 查找相近的 y
+          for (const key of Object.keys(yMap)) {
+            if (Math.abs(parseInt(key) - y) <= 3) { lineKey = parseInt(key); break; }
+          }
+          if (!yMap[lineKey]) yMap[lineKey] = [];
+          yMap[lineKey].push({ x: item.transform[4], str: item.str });
+        }
+        // 按 y 降序（从上到下），每行内按 x 升序
+        const sortedYs = Object.keys(yMap).map(Number).sort((a, b) => b - a);
+        for (const y of sortedYs) {
+          const lineItems = yMap[y].sort((a, b) => a.x - b.x);
+          const line = lineItems.map(it => it.str).join('').trim();
+          if (line) lines.push(line);
+        }
+        const pageText = lines.join('\n');
         pageStartOffsets.push(fullText.length);
-        pageTexts.push(text);
-        fullText += text + '\n';
+        pageTexts.push(pageText);
+        fullText += pageText + '\n\n';
         document.getElementById('pdfProgressFill').style.width = (40 + (i / pdf.numPages) * 50) + '%';
       }
 
@@ -1141,10 +1161,10 @@ function extractSections(text) {
 
 // 按"单元"组织教材内容，返回 [{title, lessons:[{title,content}]}]
 function extractUnits(text) {
-  // 1. 匹配所有标题：单元、章、节（单元级）、课（课文级）
-  // 单元/章/节 作为大单元，课作为课文
+  // 1. 匹配单元级标题：第X单元/章/节
   const unitRegex = /第[一二三四五六七八九十百零\d]+(?:单元|章|节)[^\n]*/g;
-  const lessonRegex = /第[一二三四五六七八九十百零\d]+课[^\n]*/g;
+  // 匹配课文标题：第X课，或行首的"数字 课文名"格式（如"1 春"、"3* 雨的四季"）
+  const lessonRegex = /(?:^|\n)(?:第[一二三四五六七八九十百零\d]+课[^\n]*|\d+\*?\s+[\u4e00-\u9fa5][^\n]{1,40})/g;
 
   const headings = [];
   let um;
@@ -1154,8 +1174,16 @@ function extractUnits(text) {
   }
   let lm;
   while ((lm = lessonRegex.exec(text)) !== null) {
-    const title = lm[0].trim().substring(0, 60);
-    if (title.length > 2) headings.push({ index: lm.index, title, type: 'lesson' });
+    let title = lm[0].trim().substring(0, 60);
+    // 去掉开头的换行符
+    title = title.replace(/^\n/, '').trim();
+    // 过滤掉纯数字行（页码）和过短的标题
+    if (title.length > 2 && !/^\d+$/.test(title)) {
+      // 过滤掉明显是目录的行（包含多个页码和斜杠）
+      if (!(/\/\s*\d+\s+\d+\//.test(title) || /\d+\s+\d+\s+\d+/.test(title))) {
+        headings.push({ index: lm.index + (lm[0].startsWith('\n') ? 1 : 0), title, type: 'lesson' });
+      }
+    }
   }
   headings.sort((a, b) => a.index - b.index);
 
@@ -1168,16 +1196,23 @@ function extractUnits(text) {
       unique.push(h);
     }
   }
+  // 移除 index 非常接近的重复标题（相差 < 3 视为重复，保留先出现的）
+  const filtered = [];
+  for (const h of unique) {
+    if (filtered.length === 0 || h.index - filtered[filtered.length-1].index >= 3) {
+      filtered.push(h);
+    }
+  }
 
   // 2. 如果有单元级标题，按单元分组；否则全部归入一个默认单元
-  const hasUnit = unique.some(h => h.type === 'unit');
+  const hasUnit = filtered.some(h => h.type === 'unit');
   const units = [];
 
   if (hasUnit) {
     let curUnit = null;
-    for (let i = 0; i < unique.length; i++) {
-      const h = unique[i];
-      const nextIdx = i + 1 < unique.length ? unique[i + 1].index : text.length;
+    for (let i = 0; i < filtered.length; i++) {
+      const h = filtered[i];
+      const nextIdx = i + 1 < filtered.length ? filtered[i + 1].index : text.length;
       const content = text.substring(h.index, nextIdx).trim();
       if (h.type === 'unit') {
         curUnit = { title: h.title, lessons: [] };
@@ -1188,33 +1223,15 @@ function extractUnits(text) {
       }
     }
   } else {
-    // 没有单元/章/节，尝试识别"课"或序号标题，全部归入"教材内容"
+    // 没有单元/章/节，全部课文归入"教材内容"
     const curUnit = { title: '教材内容', lessons: [] };
-    for (let i = 0; i < unique.length; i++) {
-      const h = unique[i];
-      const nextIdx = i + 1 < unique.length ? unique[i + 1].index : text.length;
+    for (let i = 0; i < filtered.length; i++) {
+      const h = filtered[i];
+      const nextIdx = i + 1 < filtered.length ? filtered[i + 1].index : text.length;
       const content = text.substring(h.index, nextIdx).trim();
       if (content.length > 5) curUnit.lessons.push({ title: h.title, content });
     }
     units.push(curUnit);
-
-    // 如果连"课"都没匹配到，尝试按"一、""1."等序号切分
-    if (curUnit.lessons.length === 0) {
-      const subRegex = /^[一二三四五六七八九十]+[、.．][^\n]*$/gm;
-      const subMatches = [];
-      let sm;
-      while ((sm = subRegex.exec(text)) !== null) {
-        const title = sm[0].trim().substring(0, 60);
-        if (title.length > 2) subMatches.push({ index: sm.index, title });
-      }
-      subMatches.sort((a, b) => a.index - b.index);
-      for (let i = 0; i < subMatches.length; i++) {
-        const start = subMatches[i].index;
-        const end = i + 1 < subMatches.length ? subMatches[i + 1].index : text.length;
-        const content = text.substring(start, end).trim();
-        if (content.length > 5) curUnit.lessons.push({ title: subMatches[i].title, content });
-      }
-    }
   }
 
   return units.filter(u => u.lessons.length > 0);
