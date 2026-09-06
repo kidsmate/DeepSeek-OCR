@@ -931,6 +931,13 @@ function deleteTextbook(id) {
   state.textbooks = state.textbooks.filter(t => t.id !== id);
   saveData(state);
   renderTextbooks();
+  // 同时清理 IndexedDB 中的 PDF 数据
+  deletePdfFromDB(id).catch(err => console.warn('清理 PDF 缓存失败:', err));
+  // 清除 PDF.js 文档缓存
+  if (_pdfDocCache[id]) {
+    try { _pdfDocCache[id].destroy(); } catch(e) {}
+    delete _pdfDocCache[id];
+  }
   showToast('教材已删除');
 }
 
@@ -1268,20 +1275,25 @@ function saveTextbook() {
   state.textbooks.unshift(textbook);
   saveData(state);
   renderTextbooks();
-  closePdfModal();
   showToast(`教材已保存${subject ? '（识别为：'+subject+'）' : ''}`);
 
   // 保存 PDF 原始文件到 IndexedDB（异步，不阻塞 UI）
-  if (currentPdfData.arrayBuffer) {
-    console.log('[教材保存] 正在保存 PDF 到 IndexedDB，大小:', currentPdfData.arrayBuffer.byteLength, 'bytes');
-    savePdfToDB(tid, currentPdfData.arrayBuffer, currentPdfData.name).then(() => {
+  // 注意：必须先取出 arrayBuffer 再关闭弹窗，否则 closePdfModal 会清空 currentPdfData
+  const pdfBuffer = currentPdfData.arrayBuffer;
+  const pdfName = currentPdfData.name;
+  if (pdfBuffer) {
+    console.log('[教材保存] 正在保存 PDF 到 IndexedDB，大小:', pdfBuffer.byteLength, 'bytes');
+    savePdfToDB(tid, pdfBuffer, pdfName).then(() => {
       console.log('[教材保存] PDF 已保存到 IndexedDB:', tid);
+      closePdfModal(); // 保存完成后再关闭弹窗并清空数据
     }).catch(err => {
       console.error('[教材保存] PDF 保存失败:', err);
       alert('PDF 文件保存失败：' + err.message);
+      closePdfModal(); // 即使失败也关闭弹窗
     });
   } else {
     console.warn('[教材保存] 没有 PDF arrayBuffer，hasPdf 将为 false');
+    closePdfModal();
   }
 }
 
