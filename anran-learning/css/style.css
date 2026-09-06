@@ -1530,6 +1530,49 @@ html, body {
   margin-bottom: 0;
 }
 
+/* PDF 渲染 */
+.pdf-loading {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-light);
+  font-size: 15px;
+}
+
+.pdf-page-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 16px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.pdf-page-badge {
+  background: var(--primary);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pdf-canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
 /* 小屏幕（手机）：目录和正文上下堆叠 */
 @media (max-width: 768px) {
   .tb-reader {

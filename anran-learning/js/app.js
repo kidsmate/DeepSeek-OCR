@@ -7,6 +7,63 @@ let calYear = new Date().getFullYear();
 let selectedWishIcon = '🎁';
 let currentPdfData = null;
 
+// ============ IndexedDB 工具（保存 PDF 原始文件）============
+const DB_NAME = 'anran_learning';
+const DB_VERSION = 1;
+const STORE_NAME = 'pdf_files';
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function savePdfToDB(id, arrayBuffer, name) {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).put({ id, data: arrayBuffer, name, savedAt: Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+function loadPdfFromDB(id) {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).get(id);
+    req.onsuccess = () => resolve(req.result ? req.result.data : null);
+    req.onerror = () => reject(req.error);
+  }));
+}
+
+function deletePdfFromDB(id) {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+// PDF.js 文档缓存
+const _pdfDocCache = {};
+async function getPdfDoc(textbookId, arrayBuffer) {
+  if (_pdfDocCache[textbookId]) return _pdfDocCache[textbookId];
+  if (!arrayBuffer) arrayBuffer = await loadPdfFromDB(textbookId);
+  if (!arrayBuffer) return null;
+  const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  _pdfDocCache[textbookId] = doc;
+  return doc;
+}
+
 // ============ 初始化 ============
 function init() {
   renderAll();
@@ -342,6 +399,8 @@ function renderLearnTextbook(subj, point) {
     const units = t.units && t.units.length ? t.units : null;
     const sections = t.sections || [];
     const chapters = t.chapters || [];
+    window._renderedTextbook = window._renderedTextbook || {};
+    window._renderedTextbook[ti] = t;
     
     html += `<div class="textbook-ref">`;
     html += `<div class="textbook-ref-name">📄 ${t.name}</div>`;
@@ -436,11 +495,34 @@ function renderBookReader(units, ti, point) {
   // 存储课文数据供切换使用
   window._tbLessons = window._tbLessons || {};
   window._tbLessons[ti] = allLessons;
+  window._tbSelection = window._tbSelection || {};
+  window._tbSelection[ti] = { flatIdx };
+
+  // 存储教材 ID 和是否有 PDF
+  const textbook = window._renderedTextbook && window._renderedTextbook[ti];
+  window._tbTextbookId = window._tbTextbookId || {};
+  window._tbHasPdf = window._tbHasPdf || {};
+  window._tbTextbookId[ti] = textbook ? textbook.id : null;
+  window._tbHasPdf[ti] = textbook ? !!textbook.hasPdf : false;
+
+  // 如果有 PDF，初始也渲染 PDF 页面
+  if (textbook && textbook.hasPdf) {
+    const l = allLessons[flatIdx];
+    if (l.startPage) {
+      setTimeout(() => {
+        const bodyEl = document.getElementById(`tb-content-body-${ti}`);
+        if (bodyEl) {
+          bodyEl.innerHTML = `<div class="pdf-loading">📄 正在加载 PDF 第 ${l.startPage} 页...</div>`;
+          renderPdfPage(textbook.id, l.startPage, bodyEl, l.title);
+        }
+      }, 100);
+    }
+  }
 
   return html;
 }
 
-// 选中课文（更新右侧正文）
+// 选中课文（更新右侧正文，优先渲染 PDF 页面）
 function selectBookLesson(ti, fIdx) {
   const lessons = window._tbLessons && window._tbLessons[ti];
   if (!lessons || !lessons[fIdx]) return;
@@ -452,13 +534,11 @@ function selectBookLesson(ti, fIdx) {
     el.classList.toggle('active', idx === fIdx);
   });
 
-  // 更新单元、标题、正文
+  // 更新单元、标题
   const unitEl = document.getElementById(`tb-content-unit-${ti}`);
   if (unitEl) unitEl.textContent = l.unitTitle;
   const titleEl = document.getElementById(`tb-content-title-${ti}`);
   if (titleEl) titleEl.textContent = l.title;
-  const bodyEl = document.getElementById(`tb-content-body-${ti}`);
-  if (bodyEl) bodyEl.innerHTML = formatTextbookContent(l.content);
 
   // 更新导航按钮
   const navEl = document.querySelector(`#tb-content-${ti} .tb-content-nav`);
@@ -470,9 +550,62 @@ function selectBookLesson(ti, fIdx) {
     `;
   }
 
+  // 渲染 PDF 页面（优先）或文本内容
+  const bodyEl = document.getElementById(`tb-content-body-${ti}`);
+  const textbookId = window._tbTextbookId && window._tbTextbookId[ti];
+  const hasPdf = window._tbHasPdf && window._tbHasPdf[ti];
+
+  if (hasPdf && textbookId && l.startPage) {
+    bodyEl.innerHTML = `<div class="pdf-loading">📄 正在加载 PDF 第 ${l.startPage} 页...</div>`;
+    renderPdfPage(textbookId, l.startPage, bodyEl, l.title);
+  } else {
+    bodyEl.innerHTML = formatTextbookContent(l.content);
+  }
+
   // 滚动正文到顶部
   const contentEl = document.getElementById(`tb-content-${ti}`);
   if (contentEl) contentEl.scrollTop = 0;
+}
+
+// 用 PDF.js 渲染指定页码到容器
+async function renderPdfPage(textbookId, pageNum, container, lessonTitle) {
+  try {
+    const doc = await getPdfDoc(textbookId);
+    if (!doc) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">📄</div><p>PDF 文件未找到，请重新上传教材</p></div>`;
+      return;
+    }
+    if (pageNum > doc.numPages) pageNum = doc.numPages;
+    const page = await doc.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 1.5 });
+
+    // 清空容器
+    container.innerHTML = '';
+
+    // 课文标题 + 页码信息
+    const info = document.createElement('div');
+    info.className = 'pdf-page-info';
+    info.innerHTML = `<span class="pdf-page-badge">第 ${pageNum} 页 / 共 ${doc.numPages} 页</span><button class="btn-secondary btn-sm" onclick="renderPdfPageNav('${textbookId}', ${pageNum-1}, this, '${lessonTitle.replace(/'/g,"\\'")}')" ${pageNum<=1?'disabled':''}>上一页</button><button class="btn-secondary btn-sm" onclick="renderPdfPageNav('${textbookId}', ${pageNum+1}, this, '${lessonTitle.replace(/'/g,"\\'")}')" ${pageNum>=doc.numPages?'disabled':''}>下一页</button>`;
+    container.appendChild(info);
+
+    // 渲染 canvas
+    const canvas = document.createElement('canvas');
+    canvas.className = 'pdf-canvas';
+    const ctx = canvas.getContext('2d');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    container.appendChild(canvas);
+  } catch (err) {
+    console.error('PDF 渲染失败:', err);
+    container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p>PDF 渲染失败：${err.message || '未知错误'}</p></div>`;
+  }
+}
+
+// PDF 翻页
+function renderPdfPageNav(textbookId, pageNum, btnEl, lessonTitle) {
+  const container = btnEl.closest('.tb-content-body') || btnEl.parentElement.parentElement;
+  renderPdfPage(textbookId, pageNum, container, lessonTitle);
 }
 
 // 上一篇/下一篇导航
@@ -800,7 +933,9 @@ function viewTextbook(id) {
     <div style="color:var(--text-light);font-size:13px;margin-bottom:16px;">${t.subject || '未分类'} · ${units ? units.length + ' 个单元' : sections.length + ' 个章节'} · ${totalLessons} 篇课文 · ${formatSize(t.size)} · ${formatTime(t.uploadTime)}</div>`;
   
   if (units || sections.length > 0) {
-    const bookUnits = units || [{ title: '教材内容', lessons: sections.map(s => ({ title: s.title, content: s.content })) }];
+    const bookUnits = units || [{ title: '教材内容', lessons: sections.map(s => ({ title: s.title, content: s.content, startPage: 1 })) }];
+    window._renderedTextbook = window._renderedTextbook || {};
+    window._renderedTextbook['m'] = t;
     html += renderBookReader(bookUnits, 'm', null);
   } else if (t.chapters && t.chapters.length) {
     html += '<div class="section-title">提取的章节（旧版数据，无正文）</div>';
@@ -827,7 +962,7 @@ function viewTextbook(id) {
 // PDF 处理
 function handlePdfUpload(file) {
   if (!file) return;
-  currentPdfData = { name: file.name, size: file.size, chapters: [] };
+  currentPdfData = { name: file.name, size: file.size, chapters: [], arrayBuffer: null, pageTexts: [] };
 
   document.getElementById('pdfStatus').textContent = '正在读取 PDF...';
   document.getElementById('pdfProgressFill').style.width = '10%';
@@ -838,18 +973,25 @@ function handlePdfUpload(file) {
   const reader = new FileReader();
   reader.onload = async (e) => {
     try {
-      const data = new Uint8Array(e.target.result);
+      const arrayBuffer = e.target.result;
+      const data = new Uint8Array(arrayBuffer);
+      currentPdfData.arrayBuffer = arrayBuffer;
       document.getElementById('pdfStatus').textContent = '正在解析 PDF...';
       document.getElementById('pdfProgressFill').style.width = '40%';
 
       const pdf = await pdfjsLib.getDocument({ data }).promise;
       document.getElementById('pdfStatus').textContent = `共 ${pdf.numPages} 页，正在提取文本...`;
 
+      // 按页提取文本，同时记录每页在全文中的起始字符位置
+      const pageTexts = [];
       let fullText = '';
+      const pageStartOffsets = [];
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         const text = textContent.items.map(it => it.str).join(' ');
+        pageStartOffsets.push(fullText.length);
+        pageTexts.push(text);
         fullText += text + '\n';
         document.getElementById('pdfProgressFill').style.width = (40 + (i / pdf.numPages) * 50) + '%';
       }
@@ -858,10 +1000,28 @@ function handlePdfUpload(file) {
       const chapters = extractChapters(fullText);
       const sections = extractSections(fullText);
       const units = extractUnits(fullText);
+
+      // 为每个课文计算起始页码（根据标题在全文中的位置反查）
+      units.forEach(u => {
+        u.lessons.forEach(l => {
+          const idx = fullText.indexOf(l.title);
+          if (idx >= 0) {
+            let pageNum = 1;
+            for (let p = pageStartOffsets.length - 1; p >= 0; p--) {
+              if (idx >= pageStartOffsets[p]) { pageNum = p + 1; break; }
+            }
+            l.startPage = pageNum;
+          } else {
+            l.startPage = 1;
+          }
+        });
+      });
+
       currentPdfData.chapters = chapters;
       currentPdfData.sections = sections;
       currentPdfData.units = units;
       currentPdfData.fullText = fullText;
+      currentPdfData.pageTexts = pageTexts;
 
       const totalLessons = units.reduce((s, u) => s + u.lessons.length, 0);
       document.getElementById('pdfStatus').textContent = `提取完成！识别到 ${units.length} 个单元、${totalLessons} 篇课文`;
@@ -1054,8 +1214,9 @@ function saveTextbook() {
   if (!currentPdfData) return;
   // 尝试匹配学科
   const subject = guessSubject(currentPdfData.name);
+  const tid = 't' + Date.now();
   const textbook = {
-    id: 't' + Date.now(),
+    id: tid,
     name: currentPdfData.name,
     subject: subject,
     size: currentPdfData.size,
@@ -1063,19 +1224,27 @@ function saveTextbook() {
     chapters: currentPdfData.chapters || [],
     sections: currentPdfData.sections || [],
     units: currentPdfData.units || [],
+    hasPdf: !!currentPdfData.arrayBuffer,
   };
   // 如果没有提取到章节，则把全文作为一个章节保存
   if (textbook.sections.length === 0 && currentPdfData.fullText) {
     textbook.sections = [{ title: '教材全文', content: currentPdfData.fullText }];
   }
   if (textbook.units.length === 0 && currentPdfData.fullText) {
-    textbook.units = [{ title: '教材内容', lessons: [{ title: '教材全文', content: currentPdfData.fullText }] }];
+    textbook.units = [{ title: '教材内容', lessons: [{ title: '教材全文', content: currentPdfData.fullText, startPage: 1 }] }];
   }
   state.textbooks.unshift(textbook);
   saveData(state);
   renderTextbooks();
   closePdfModal();
   showToast(`教材已保存${subject ? '（识别为：'+subject+'）' : ''}`);
+
+  // 保存 PDF 原始文件到 IndexedDB（异步，不阻塞 UI）
+  if (currentPdfData.arrayBuffer) {
+    savePdfToDB(tid, currentPdfData.arrayBuffer, currentPdfData.name).then(() => {
+      console.log('PDF 已保存到 IndexedDB:', tid);
+    }).catch(err => console.error('PDF 保存失败:', err));
+  }
 }
 
 function guessSubject(filename) {
