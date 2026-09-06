@@ -314,9 +314,14 @@ function openLearnPage(subj, point) {
   navigate('learn');
 }
 
+// 记录当前选中的教材章节索引 {textbookIdx: sectionIdx}
+const currentTbSelection = {};
+// 缓存当前渲染的教材列表（供 selectTbSection 访问 sections 数据）
+let _renderedTextbooks = [];
+
 function renderLearnTextbook(subj, point) {
-  // 查找该学科上传的教材
   const textbooks = state.textbooks.filter(t => t.subject === subj.name || t.subject === '');
+  _renderedTextbooks = textbooks;
   const container = document.getElementById('learnTextbook');
   
   if (textbooks.length === 0) {
@@ -331,23 +336,17 @@ function renderLearnTextbook(subj, point) {
     return;
   }
 
-  // 尝试匹配当前知识点对应的章节
-  const matchedIdx = findRelevantSection(textbooks[0], point);
-
   let html = `<div class="learn-section-title">📖 教材内容（${subj.name}）</div>`;
   
   textbooks.forEach((t, ti) => {
     const sections = t.sections || [];
     const chapters = t.chapters || [];
     
-    html += `
-      <div class="textbook-ref">
-        <div class="textbook-ref-name">📄 ${t.name}</div>
-        <div class="textbook-ref-meta">上传于 ${formatTime(t.uploadTime)} · ${sections.length} 个章节</div>
-    `;
+    html += `<div class="textbook-ref">`;
+    html += `<div class="textbook-ref-name">📄 ${t.name}</div>`;
+    html += `<div class="textbook-ref-meta">上传于 ${formatTime(t.uploadTime)} · ${sections.length} 个章节</div>`;
 
     if (sections.length === 0) {
-      // 旧版教材数据，没有正文
       html += `
         <div class="textbook-old-notice">
           ⚠️ 该教材为旧版数据，未保存正文内容。请删除后重新上传以查看完整教材正文。
@@ -355,32 +354,44 @@ function renderLearnTextbook(subj, point) {
         ${chapters.length ? '<div class="chapters-mini">' + chapters.slice(0, 15).map((c, i) => `<span class="chapter-chip">${i+1}. ${c}</span>`).join('') + '</div>' : ''}
       `;
     } else {
-      // 展开/收起全部按钮
+      const matchedIdx = findRelevantSection(t, point);
+      const activeIdx = matchedIdx >= 0 ? matchedIdx : 0;
+      currentTbSelection[ti] = activeIdx;
+
       html += `
-        <div class="tb-action-bar">
-          <button class="btn-secondary btn-sm" onclick="toggleAllSections(${ti}, true)">展开全部</button>
-          <button class="btn-secondary btn-sm" onclick="toggleAllSections(${ti}, false)">收起全部</button>
-          ${matchedIdx >= 0 ? `<span class="tb-match-tip">💡 已为你定位到「${sections[matchedIdx].title.substring(0, 20)}」</span>` : ''}
-        </div>
-        <div class="tb-sections" id="tb-sections-${ti}">
+        ${matchedIdx >= 0 ? `<div class="tb-match-tip-bar">💡 已为你定位到「${sections[matchedIdx].title.substring(0, 25)}」</div>` : ''}
+        <div class="tb-reader" id="tb-reader-${ti}">
+          <div class="tb-toc">
+            <div class="tb-toc-title">📑 目录</div>
+            <div class="tb-toc-list" id="tb-toc-list-${ti}">
       `;
       sections.forEach((sec, i) => {
-        const isMatched = (ti === 0 && i === matchedIdx);
-        const isOpen = isMatched || i === 0;
-        const contentHtml = formatTextbookContent(sec.content);
         html += `
-          <div class="tb-section ${isMatched ? 'matched' : ''}" id="tb-sec-${ti}-${i}">
-            <div class="tb-section-head" onclick="toggleTbSection(${ti}, ${i})">
-              <span class="tb-sec-index">第 ${i+1} 节</span>
-              <span class="tb-sec-title">${sec.title}</span>
-              <span class="tb-sec-arrow ${isOpen ? 'open' : ''}">▼</span>
-            </div>
-            <div class="tb-section-body" style="display:${isOpen ? 'block' : 'none'};">
-              ${contentHtml}
-            </div>
+          <div class="tb-toc-item ${i === activeIdx ? 'active' : ''}" 
+               id="tb-toc-item-${ti}-${i}"
+               onclick="selectTbSection(${ti}, ${i})">
+            <span class="tb-toc-num">${i+1}</span>
+            <span class="tb-toc-text">${escapeHtml(sec.title)}</span>
           </div>
         `;
       });
+      html += `</div></div>`;
+
+      html += `
+        <div class="tb-content" id="tb-content-${ti}">
+          <div class="tb-content-header">
+            <h2 class="tb-content-title" id="tb-content-title-${ti}">${escapeHtml(sections[activeIdx].title)}</h2>
+            <div class="tb-content-nav">
+              <button class="btn-secondary btn-sm" onclick="navTbSection(${ti}, -1)" ${activeIdx === 0 ? 'disabled' : ''}>← 上一章</button>
+              <span class="tb-content-page">${activeIdx+1} / ${sections.length}</span>
+              <button class="btn-secondary btn-sm" onclick="navTbSection(${ti}, 1)" ${activeIdx === sections.length-1 ? 'disabled' : ''}>下一章 →</button>
+            </div>
+          </div>
+          <div class="tb-content-body" id="tb-content-body-${ti}">
+            ${formatTextbookContent(sections[activeIdx].content)}
+          </div>
+        </div>
+      `;
       html += `</div>`;
     }
     
@@ -388,6 +399,52 @@ function renderLearnTextbook(subj, point) {
   });
   
   container.innerHTML = html;
+}
+
+// 选中教材章节（更新右侧正文）
+function selectTbSection(ti, i) {
+  const t = _renderedTextbooks[ti];
+  if (!t || !t.sections || !t.sections[i]) return;
+  currentTbSelection[ti] = i;
+  const sec = t.sections[i];
+
+  // 更新目录高亮
+  document.querySelectorAll(`#tb-toc-list-${ti} .tb-toc-item`).forEach((el, idx) => {
+    el.classList.toggle('active', idx === i);
+  });
+
+  // 更新标题
+  const titleEl = document.getElementById(`tb-content-title-${ti}`);
+  if (titleEl) titleEl.textContent = sec.title;
+
+  // 更新正文
+  const bodyEl = document.getElementById(`tb-content-body-${ti}`);
+  if (bodyEl) bodyEl.innerHTML = formatTextbookContent(sec.content);
+
+  // 更新导航按钮
+  const navEl = document.querySelector(`#tb-content-${ti} .tb-content-nav`);
+  if (navEl) {
+    navEl.innerHTML = `
+      <button class="btn-secondary btn-sm" onclick="navTbSection(${ti}, -1)" ${i === 0 ? 'disabled' : ''}>← 上一章</button>
+      <span class="tb-content-page">${i+1} / ${t.sections.length}</span>
+      <button class="btn-secondary btn-sm" onclick="navTbSection(${ti}, 1)" ${i === t.sections.length-1 ? 'disabled' : ''}>下一章 →</button>
+    `;
+  }
+
+  // 滚动正文到顶部
+  const contentEl = document.getElementById(`tb-content-${ti}`);
+  if (contentEl) contentEl.scrollTop = 0;
+}
+
+// 上一章/下一章导航
+function navTbSection(ti, dir) {
+  const t = _renderedTextbooks[ti];
+  if (!t || !t.sections) return;
+  const cur = currentTbSelection[ti] || 0;
+  const next = cur + dir;
+  if (next >= 0 && next < t.sections.length) {
+    selectTbSection(ti, next);
+  }
 }
 
 // 根据知识点匹配教材中的相关章节（关键词重叠度）
@@ -431,27 +488,6 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
-}
-
-// 展开/收起单个章节
-function toggleTbSection(ti, i) {
-  const sec = document.getElementById(`tb-sec-${ti}-${i}`);
-  if (!sec) return;
-  const body = sec.querySelector('.tb-section-body');
-  const arrow = sec.querySelector('.tb-sec-arrow');
-  const isOpen = body.style.display === 'block';
-  body.style.display = isOpen ? 'none' : 'block';
-  arrow.classList.toggle('open', !isOpen);
-}
-
-// 展开/收起全部章节
-function toggleAllSections(ti, open) {
-  const container = document.getElementById(`tb-sections-${ti}`);
-  if (!container) return;
-  const bodies = container.querySelectorAll('.tb-section-body');
-  const arrows = container.querySelectorAll('.tb-sec-arrow');
-  bodies.forEach(b => b.style.display = open ? 'block' : 'none');
-  arrows.forEach(a => a.classList.toggle('open', open));
 }
 
 function renderLearnVideo(keywords) {
@@ -542,6 +578,11 @@ function markLearned() {
 function closeModal() {
   document.getElementById('knowledgeModal').classList.remove('show');
   document.getElementById('btnMarkLearned').style.display = '';
+  // 恢复弹窗默认样式
+  const modalContent = document.querySelector('#knowledgeModal .modal-content');
+  if (modalContent) modalContent.classList.remove('modal-wide');
+  const modalFooter = document.querySelector('#knowledgeModal .modal-footer');
+  if (modalFooter) modalFooter.style.display = '';
   currentKnowledge = null;
 }
 
@@ -701,35 +742,55 @@ function deleteTextbook(id) {
   showToast('教材已删除');
 }
 
+// 弹窗中当前查看的教材及选中章节
+let _modalTextbook = null;
+let _modalSectionIdx = 0;
+
 function viewTextbook(id) {
   const t = state.textbooks.find(x => x.id === id);
   if (!t) return;
+  _modalTextbook = t;
+  _modalSectionIdx = 0;
   const sections = t.sections || [];
   let html = `<h3 style="margin-bottom:8px;">${t.name}</h3>
     <div style="color:var(--text-light);font-size:13px;margin-bottom:16px;">${t.subject || '未分类'} · ${sections.length} 个章节 · ${formatSize(t.size)} · ${formatTime(t.uploadTime)}</div>`;
   
   if (sections.length > 0) {
-    html += `<div class="tb-action-bar" style="margin-bottom:12px;">
-      <button class="btn-secondary btn-sm" onclick="toggleAllModalSections(true)">展开全部</button>
-      <button class="btn-secondary btn-sm" onclick="toggleAllModalSections(false)">收起全部</button>
-    </div>`;
-    html += '<div id="modal-tb-sections">';
+    const activeIdx = 0;
+    html += `
+      <div class="tb-reader" id="modal-tb-reader">
+        <div class="tb-toc">
+          <div class="tb-toc-title">📑 目录</div>
+          <div class="tb-toc-list" id="modal-tb-toc-list">
+    `;
     sections.forEach((sec, i) => {
-      const isOpen = i === 0;
       html += `
-        <div class="tb-section" id="modal-tb-sec-${i}">
-          <div class="tb-section-head" onclick="toggleModalTbSection(${i})">
-            <span class="tb-sec-index">第 ${i+1} 节</span>
-            <span class="tb-sec-title">${sec.title}</span>
-            <span class="tb-sec-arrow ${isOpen ? 'open' : ''}">▼</span>
-          </div>
-          <div class="tb-section-body" style="display:${isOpen ? 'block' : 'none'};">
-            ${formatTextbookContent(sec.content)}
-          </div>
+        <div class="tb-toc-item ${i === activeIdx ? 'active' : ''}" 
+             id="modal-tb-toc-item-${i}"
+             onclick="selectModalTbSection(${i})">
+          <span class="tb-toc-num">${i+1}</span>
+          <span class="tb-toc-text">${escapeHtml(sec.title)}</span>
         </div>
       `;
     });
-    html += '</div>';
+    html += `</div></div>`;
+
+    html += `
+      <div class="tb-content" id="modal-tb-content">
+        <div class="tb-content-header">
+          <h2 class="tb-content-title" id="modal-tb-content-title">${escapeHtml(sections[activeIdx].title)}</h2>
+          <div class="tb-content-nav">
+            <button class="btn-secondary btn-sm" onclick="navModalTbSection(-1)" disabled>← 上一章</button>
+            <span class="tb-content-page">1 / ${sections.length}</span>
+            <button class="btn-secondary btn-sm" onclick="navModalTbSection(1)" ${sections.length <= 1 ? 'disabled' : ''}>下一章 →</button>
+          </div>
+        </div>
+        <div class="tb-content-body" id="modal-tb-content-body">
+          ${formatTextbookContent(sections[activeIdx].content)}
+        </div>
+      </div>
+    `;
+    html += `</div>`;
   } else if (t.chapters && t.chapters.length) {
     html += '<div class="section-title">提取的章节（旧版数据，无正文）</div>';
     html += t.chapters.map((c, i) => `
@@ -744,24 +805,50 @@ function viewTextbook(id) {
   document.getElementById('kpTitle').textContent = '教材详情';
   document.getElementById('kpBody').innerHTML = html;
   document.getElementById('btnMarkLearned').style.display = 'none';
+  // 教材阅读器使用宽版弹窗，隐藏底部操作栏
+  const modalContent = document.querySelector('#knowledgeModal .modal-content');
+  if (modalContent) modalContent.classList.add('modal-wide');
+  const modalFooter = document.querySelector('#knowledgeModal .modal-footer');
+  if (modalFooter) modalFooter.style.display = 'none';
   document.getElementById('knowledgeModal').classList.add('show');
 }
 
-function toggleModalTbSection(i) {
-  const sec = document.getElementById(`modal-tb-sec-${i}`);
-  if (!sec) return;
-  const body = sec.querySelector('.tb-section-body');
-  const arrow = sec.querySelector('.tb-sec-arrow');
-  const isOpen = body.style.display === 'block';
-  body.style.display = isOpen ? 'none' : 'block';
-  arrow.classList.toggle('open', !isOpen);
+function selectModalTbSection(i) {
+  const t = _modalTextbook;
+  if (!t || !t.sections || !t.sections[i]) return;
+  _modalSectionIdx = i;
+  const sec = t.sections[i];
+
+  document.querySelectorAll('#modal-tb-toc-list .tb-toc-item').forEach((el, idx) => {
+    el.classList.toggle('active', idx === i);
+  });
+
+  const titleEl = document.getElementById('modal-tb-content-title');
+  if (titleEl) titleEl.textContent = sec.title;
+
+  const bodyEl = document.getElementById('modal-tb-content-body');
+  if (bodyEl) bodyEl.innerHTML = formatTextbookContent(sec.content);
+
+  const navEl = document.querySelector('#modal-tb-content .tb-content-nav');
+  if (navEl) {
+    navEl.innerHTML = `
+      <button class="btn-secondary btn-sm" onclick="navModalTbSection(-1)" ${i === 0 ? 'disabled' : ''}>← 上一章</button>
+      <span class="tb-content-page">${i+1} / ${t.sections.length}</span>
+      <button class="btn-secondary btn-sm" onclick="navModalTbSection(1)" ${i === t.sections.length-1 ? 'disabled' : ''}>下一章 →</button>
+    `;
+  }
+
+  const contentEl = document.getElementById('modal-tb-content');
+  if (contentEl) contentEl.scrollTop = 0;
 }
 
-function toggleAllModalSections(open) {
-  const container = document.getElementById('modal-tb-sections');
-  if (!container) return;
-  container.querySelectorAll('.tb-section-body').forEach(b => b.style.display = open ? 'block' : 'none');
-  container.querySelectorAll('.tb-sec-arrow').forEach(a => a.classList.toggle('open', open));
+function navModalTbSection(dir) {
+  const t = _modalTextbook;
+  if (!t || !t.sections) return;
+  const next = _modalSectionIdx + dir;
+  if (next >= 0 && next < t.sections.length) {
+    selectModalTbSection(next);
+  }
 }
 
 // PDF 处理
