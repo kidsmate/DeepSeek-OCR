@@ -996,8 +996,10 @@ function handlePdfUpload(file) {
   reader.onload = async (e) => {
     try {
       const arrayBuffer = e.target.result;
-      const data = new Uint8Array(arrayBuffer);
+      // 保存原始 buffer 用于后续存入 IndexedDB
       currentPdfData.arrayBuffer = arrayBuffer;
+      // 给 PDF.js 传一份副本，避免原始 buffer 被 detach 后无法存入 IndexedDB
+      const data = new Uint8Array(arrayBuffer.slice(0));
       document.getElementById('pdfStatus').textContent = '正在解析 PDF...';
       document.getElementById('pdfProgressFill').style.width = '40%';
 
