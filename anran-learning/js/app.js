@@ -366,71 +366,123 @@ function renderLearnTextbook(subj, point) {
   container.innerHTML = html;
 }
 
-// 渲染书本式阅读器：顶部目录 + 纵向课文
+// 渲染书本式阅读器：左侧目录 + 右侧正文（左右分栏）
 function renderBookReader(units, ti, point) {
   let html = '';
+  const readerId = `reader-${ti}`;
 
-  // 找到匹配的课文锚点
-  let matchedAnchor = '';
-
-  // 顶部粘性目录
-  html += `<div class="book-toc-bar" id="book-toc-${ti}">`;
-  html += `<div class="book-toc-label">📑 目录（点击课文标题跳转）</div>`;
-  html += `<div class="book-toc-links">`;
+  // 找到匹配的课文索引
+  let matchedU = -1, matchedL = -1;
   units.forEach((u, ui) => {
-    html += `<div class="book-toc-unit">${escapeHtml(u.title)}</div>`;
     u.lessons.forEach((l, li) => {
-      const anchor = `book-${ti}-u${ui}-l${li}`;
-      const matched = point && (l.title.includes(point.title) || point.title.includes(l.title.substring(0, 2)) || findRelevantSection({sections:[{title:l.title,content:l.content}]}, point) === 0);
-      if (matched) matchedAnchor = anchor;
-      html += `<a class="book-toc-link ${matched ? 'matched' : ''}" onclick="scrollToLesson('${anchor}')">${escapeHtml(l.title)}</a>`;
+      if (matchedU < 0 && point && (l.title.includes(point.title) || point.title.includes(l.title.substring(0, 2)) || findRelevantSection({sections:[{title:l.title,content:l.content}]}, point) === 0)) {
+        matchedU = ui; matchedL = li;
+      }
+    });
+  });
+  if (matchedU < 0) { matchedU = 0; matchedL = 0; }
+
+  // 构建所有课文的扁平列表，便于右侧渲染
+  const allLessons = [];
+  units.forEach((u, ui) => {
+    u.lessons.forEach((l, li) => {
+      allLessons.push({ unitTitle: u.title, ui, li, ...l });
+    });
+  });
+  const flatIdx = matchedU >= 0 ? allLessons.findIndex(l => l.ui === matchedU && l.li === matchedL) : 0;
+
+  // 存储当前选中状态
+  window._tbSelection = window._tbSelection || {};
+  window._tbSelection[ti] = { flatIdx };
+
+  html += `<div class="tb-reader" id="${readerId}">`;
+
+  // ===== 左侧目录 =====
+  html += `<div class="tb-toc">`;
+  html += `<div class="tb-toc-title">📑 目录</div>`;
+  html += `<div class="tb-toc-list" id="tb-toc-list-${ti}">`;
+  units.forEach((u, ui) => {
+    html += `<div class="tb-toc-unit-label">${escapeHtml(u.title)}</div>`;
+    u.lessons.forEach((l, li) => {
+      const fIdx = allLessons.findIndex(x => x.ui === ui && x.li === li);
+      const active = (ui === matchedU && li === matchedL);
+      html += `
+        <div class="tb-toc-item ${active ? 'active' : ''}" 
+             id="tb-toc-item-${ti}-${fIdx}"
+             onclick="selectBookLesson('${ti}', ${fIdx})">
+          <span class="tb-toc-text">${escapeHtml(l.title)}</span>
+        </div>
+      `;
     });
   });
   html += `</div></div>`;
 
-  if (matchedAnchor) {
-    html += `<div class="tb-match-tip-bar">💡 已为你定位到相关课文</div>`;
-  }
+  // ===== 右侧正文 =====
+  html += `<div class="tb-content" id="tb-content-${ti}">`;
+  html += `<div class="tb-content-header">`;
+  html += `<div class="tb-content-unit" id="tb-content-unit-${ti}">${escapeHtml(allLessons[flatIdx].unitTitle)}</div>`;
+  html += `<h2 class="tb-content-title" id="tb-content-title-${ti}">${escapeHtml(allLessons[flatIdx].title)}</h2>`;
+  html += `<div class="tb-content-nav">`;
+  html += `<button class="btn-secondary btn-sm" onclick="navBookLesson('${ti}', -1)" ${flatIdx === 0 ? 'disabled' : ''}>← 上一篇</button>`;
+  html += `<span class="tb-content-page">${flatIdx+1} / ${allLessons.length}</span>`;
+  html += `<button class="btn-secondary btn-sm" onclick="navBookLesson('${ti}', 1)" ${flatIdx === allLessons.length-1 ? 'disabled' : ''}>下一篇 →</button>`;
+  html += `</div></div>`;
+  html += `<div class="tb-content-body" id="tb-content-body-${ti}">`;
+  html += formatTextbookContent(allLessons[flatIdx].content);
+  html += `</div></div>`;
 
-  // 主体：纵向排列所有单元和课文
-  html += `<div class="book-body">`;
-  units.forEach((u, ui) => {
-    html += `<section class="book-unit" id="book-${ti}-u${ui}">`;
-    html += `<h2 class="book-unit-title">${escapeHtml(u.title)}</h2>`;
-    html += `<div class="book-unit-divider"></div>`;
-    u.lessons.forEach((l, li) => {
-      const anchor = `book-${ti}-u${ui}-l${li}`;
-      html += `<article class="book-lesson" id="${anchor}">`;
-      html += `<h3 class="book-lesson-title">${escapeHtml(l.title)}</h3>`;
-      html += `<div class="book-lesson-content">${formatTextbookContent(l.content)}</div>`;
-      html += `</article>`;
-    });
-    html += `</section>`;
-  });
   html += `</div>`;
 
-  // 如果有匹配课文，渲染后滚动到该位置
-  if (matchedAnchor) {
-    html += `<script>setTimeout(()=>{scrollToLesson('${matchedAnchor}');},400);</script>`;
-  }
+  // 存储课文数据供切换使用
+  window._tbLessons = window._tbLessons || {};
+  window._tbLessons[ti] = allLessons;
 
   return html;
 }
 
-// 跳转到指定课文（在滚动容器内定位）
-function scrollToLesson(anchorId) {
-  const el = document.getElementById(anchorId);
-  if (!el) return;
-  // 找到最近的可滚动祖先容器
-  let scrollParent = el.parentElement;
-  while (scrollParent && getComputedStyle(scrollParent).overflowY !== 'auto' && getComputedStyle(scrollParent).overflowY !== 'scroll') {
-    scrollParent = scrollParent.parentElement;
+// 选中课文（更新右侧正文）
+function selectBookLesson(ti, fIdx) {
+  const lessons = window._tbLessons && window._tbLessons[ti];
+  if (!lessons || !lessons[fIdx]) return;
+  const l = lessons[fIdx];
+  window._tbSelection[ti] = { flatIdx: fIdx };
+
+  // 更新目录高亮
+  document.querySelectorAll(`#tb-toc-list-${ti} .tb-toc-item`).forEach((el, idx) => {
+    el.classList.toggle('active', idx === fIdx);
+  });
+
+  // 更新单元、标题、正文
+  const unitEl = document.getElementById(`tb-content-unit-${ti}`);
+  if (unitEl) unitEl.textContent = l.unitTitle;
+  const titleEl = document.getElementById(`tb-content-title-${ti}`);
+  if (titleEl) titleEl.textContent = l.title;
+  const bodyEl = document.getElementById(`tb-content-body-${ti}`);
+  if (bodyEl) bodyEl.innerHTML = formatTextbookContent(l.content);
+
+  // 更新导航按钮
+  const navEl = document.querySelector(`#tb-content-${ti} .tb-content-nav`);
+  if (navEl) {
+    navEl.innerHTML = `
+      <button class="btn-secondary btn-sm" onclick="navBookLesson('${ti}', -1)" ${fIdx === 0 ? 'disabled' : ''}>← 上一篇</button>
+      <span class="tb-content-page">${fIdx+1} / ${lessons.length}</span>
+      <button class="btn-secondary btn-sm" onclick="navBookLesson('${ti}', 1)" ${fIdx === lessons.length-1 ? 'disabled' : ''}>下一篇 →</button>
+    `;
   }
-  if (scrollParent) {
-    const top = el.offsetTop - scrollParent.offsetTop - 20;
-    scrollParent.scrollTo({ top, behavior: 'smooth' });
-  } else {
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // 滚动正文到顶部
+  const contentEl = document.getElementById(`tb-content-${ti}`);
+  if (contentEl) contentEl.scrollTop = 0;
+}
+
+// 上一篇/下一篇导航
+function navBookLesson(ti, dir) {
+  const lessons = window._tbLessons && window._tbLessons[ti];
+  if (!lessons) return;
+  const cur = (window._tbSelection && window._tbSelection[ti] && window._tbSelection[ti].flatIdx) || 0;
+  const next = cur + dir;
+  if (next >= 0 && next < lessons.length) {
+    selectBookLesson(ti, next);
   }
 }
 
