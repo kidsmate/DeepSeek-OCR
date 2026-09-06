@@ -56,10 +56,21 @@ function deletePdfFromDB(id) {
 // PDF.js 文档缓存
 const _pdfDocCache = {};
 async function getPdfDoc(textbookId, arrayBuffer) {
-  if (_pdfDocCache[textbookId]) return _pdfDocCache[textbookId];
-  if (!arrayBuffer) arrayBuffer = await loadPdfFromDB(textbookId);
-  if (!arrayBuffer) return null;
+  if (_pdfDocCache[textbookId]) {
+    console.log('[PDF] 使用缓存的文档:', textbookId);
+    return _pdfDocCache[textbookId];
+  }
+  if (!arrayBuffer) {
+    console.log('[PDF] 从 IndexedDB 加载:', textbookId);
+    arrayBuffer = await loadPdfFromDB(textbookId);
+  }
+  if (!arrayBuffer) {
+    console.error('[PDF] IndexedDB 中未找到 PDF:', textbookId);
+    return null;
+  }
+  console.log('[PDF] PDF 数据大小:', arrayBuffer.byteLength, 'bytes');
   const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  console.log('[PDF] 文档加载成功，共', doc.numPages, '页');
   _pdfDocCache[textbookId] = doc;
   return doc;
 }
@@ -504,10 +515,12 @@ function renderBookReader(units, ti, point) {
   window._tbHasPdf = window._tbHasPdf || {};
   window._tbTextbookId[ti] = textbook ? textbook.id : null;
   window._tbHasPdf[ti] = textbook ? !!textbook.hasPdf : false;
+  console.log('[教材阅读器] ti=', ti, 'textbook=', textbook ? { id: textbook.id, hasPdf: textbook.hasPdf, units: textbook.units && textbook.units.length } : null);
 
   // 如果有 PDF，初始也渲染 PDF 页面
   if (textbook && textbook.hasPdf) {
     const l = allLessons[flatIdx];
+    console.log('[教材阅读器] 初始渲染 PDF，课文=', l.title, 'startPage=', l.startPage);
     if (l.startPage) {
       setTimeout(() => {
         const bodyEl = document.getElementById(`tb-content-body-${ti}`);
@@ -517,6 +530,8 @@ function renderBookReader(units, ti, point) {
         }
       }, 100);
     }
+  } else {
+    console.log('[教材阅读器] 无 PDF，显示文本内容。hasPdf=', textbook && textbook.hasPdf);
   }
 
   return html;
@@ -1241,9 +1256,15 @@ function saveTextbook() {
 
   // 保存 PDF 原始文件到 IndexedDB（异步，不阻塞 UI）
   if (currentPdfData.arrayBuffer) {
+    console.log('[教材保存] 正在保存 PDF 到 IndexedDB，大小:', currentPdfData.arrayBuffer.byteLength, 'bytes');
     savePdfToDB(tid, currentPdfData.arrayBuffer, currentPdfData.name).then(() => {
-      console.log('PDF 已保存到 IndexedDB:', tid);
-    }).catch(err => console.error('PDF 保存失败:', err));
+      console.log('[教材保存] PDF 已保存到 IndexedDB:', tid);
+    }).catch(err => {
+      console.error('[教材保存] PDF 保存失败:', err);
+      alert('PDF 文件保存失败：' + err.message);
+    });
+  } else {
+    console.warn('[教材保存] 没有 PDF arrayBuffer，hasPdf 将为 false');
   }
 }
 
