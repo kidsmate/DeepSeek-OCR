@@ -476,11 +476,12 @@ function renderBookReader(units, ti, point) {
     u.lessons.forEach((l, li) => {
       const fIdx = allLessons.findIndex(x => x.ui === ui && x.li === li);
       const active = (ui === matchedU && li === matchedL);
+      const pageTag = l.startPage ? `<span class="tb-toc-page">${l.startPage}</span>` : '';
       html += `
         <div class="tb-toc-item ${active ? 'active' : ''}" 
              id="tb-toc-item-${ti}-${fIdx}"
              onclick="selectBookLesson('${ti}', ${fIdx})">
-          <span class="tb-toc-text">${escapeHtml(l.title)}</span>
+          <span class="tb-toc-text">${escapeHtml(l.title)}</span>${pageTag}
         </div>
       `;
     });
@@ -520,13 +521,15 @@ function renderBookReader(units, ti, point) {
   // 如果有 PDF，初始也渲染 PDF 页面
   if (textbook && textbook.hasPdf) {
     const l = allLessons[flatIdx];
-    console.log('[教材阅读器] 初始渲染 PDF，课文=', l.title, 'startPage=', l.startPage);
+    console.log('[教材阅读器] 初始渲染 PDF，课文=', l.title, 'startPage=', l.startPage, 'endPage=', l.endPage);
     if (l.startPage) {
+      const sp = l.startPage;
+      const ep = l.endPage || l.startPage;
       setTimeout(() => {
         const bodyEl = document.getElementById(`tb-content-body-${ti}`);
         if (bodyEl) {
-          bodyEl.innerHTML = `<div class="pdf-loading">📄 正在加载 PDF 第 ${l.startPage} 页...</div>`;
-          renderPdfPage(textbook.id, l.startPage, bodyEl, l.title);
+          bodyEl.innerHTML = `<div class="pdf-loading">📄 正在加载 PDF 第 ${sp} 页${ep > sp ? `（本文章 第 ${sp}-${ep} 页）` : ''}...</div>`;
+          renderPdfPage(textbook.id, sp, bodyEl, l.title, sp, ep);
         }
       }, 100);
     }
@@ -571,8 +574,10 @@ function selectBookLesson(ti, fIdx) {
   const hasPdf = window._tbHasPdf && window._tbHasPdf[ti];
 
   if (hasPdf && textbookId && l.startPage) {
-    bodyEl.innerHTML = `<div class="pdf-loading">📄 正在加载 PDF 第 ${l.startPage} 页...</div>`;
-    renderPdfPage(textbookId, l.startPage, bodyEl, l.title);
+    const sp = l.startPage;
+    const ep = l.endPage || l.startPage;
+    bodyEl.innerHTML = `<div class="pdf-loading">📄 正在加载 PDF 第 ${sp} 页${ep > sp ? `（本文章 第 ${sp}-${ep} 页）` : ''}...</div>`;
+    renderPdfPage(textbookId, sp, bodyEl, l.title, sp, ep);
   } else {
     bodyEl.innerHTML = formatTextbookContent(l.content);
   }
@@ -582,8 +587,8 @@ function selectBookLesson(ti, fIdx) {
   if (contentEl) contentEl.scrollTop = 0;
 }
 
-// 用 PDF.js 渲染指定页码到容器
-async function renderPdfPage(textbookId, pageNum, container, lessonTitle) {
+// 用 PDF.js 渲染指定页码到容器（支持文章页码范围）
+async function renderPdfPage(textbookId, pageNum, container, lessonTitle, startPage, endPage) {
   try {
     const doc = await getPdfDoc(textbookId);
     if (!doc) {
@@ -591,16 +596,22 @@ async function renderPdfPage(textbookId, pageNum, container, lessonTitle) {
       return;
     }
     if (pageNum > doc.numPages) pageNum = doc.numPages;
+    if (pageNum < 1) pageNum = 1;
     const page = await doc.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1.5 });
 
     // 清空容器
     container.innerHTML = '';
 
-    // 课文标题 + 页码信息
+    // 页码范围信息
+    const sp = startPage || pageNum;
+    const ep = endPage || pageNum;
+    const rangeText = (ep > sp) ? `（本文章 第 ${sp}-${ep} 页）` : '';
     const info = document.createElement('div');
     info.className = 'pdf-page-info';
-    info.innerHTML = `<span class="pdf-page-badge">第 ${pageNum} 页 / 共 ${doc.numPages} 页</span><button class="btn-secondary btn-sm" onclick="renderPdfPageNav('${textbookId}', ${pageNum-1}, this, '${lessonTitle.replace(/'/g,"\\'")}')" ${pageNum<=1?'disabled':''}>上一页</button><button class="btn-secondary btn-sm" onclick="renderPdfPageNav('${textbookId}', ${pageNum+1}, this, '${lessonTitle.replace(/'/g,"\\'")}')" ${pageNum>=doc.numPages?'disabled':''}>下一页</button>`;
+    info.innerHTML = `<span class="pdf-page-badge">第 ${pageNum} 页 / 共 ${doc.numPages} 页 ${rangeText}</span>
+      <button class="btn-secondary btn-sm" onclick="renderPdfPageNav('${textbookId}', ${pageNum-1}, this, '${lessonTitle.replace(/'/g,"\\'")}', ${sp}, ${ep})" ${pageNum<=sp?'disabled':''}>上一页</button>
+      <button class="btn-secondary btn-sm" onclick="renderPdfPageNav('${textbookId}', ${pageNum+1}, this, '${lessonTitle.replace(/'/g,"\\'")}', ${sp}, ${ep})" ${pageNum>=ep?'disabled':''}>下一页</button>`;
     container.appendChild(info);
 
     // 渲染 canvas
@@ -617,10 +628,10 @@ async function renderPdfPage(textbookId, pageNum, container, lessonTitle) {
   }
 }
 
-// PDF 翻页
-function renderPdfPageNav(textbookId, pageNum, btnEl, lessonTitle) {
+// PDF 翻页（在文章页码范围内翻页）
+function renderPdfPageNav(textbookId, pageNum, btnEl, lessonTitle, startPage, endPage) {
   const container = btnEl.closest('.tb-content-body') || btnEl.parentElement.parentElement;
-  renderPdfPage(textbookId, pageNum, container, lessonTitle);
+  renderPdfPage(textbookId, pageNum, container, lessonTitle, startPage, endPage);
 }
 
 // 上一篇/下一篇导航
@@ -1040,49 +1051,42 @@ function handlePdfUpload(file) {
         document.getElementById('pdfProgressFill').style.width = (40 + (i / pdf.numPages) * 50) + '%';
       }
 
-      // 提取章节标题、正文及单元结构
+      // 优先从目录页解析单元/课文（格式与原书目录一致，且自带准确页码）
+      // 若没有目录页，再用旧方法从全文提取
+      const tocUnits = extractUnitsFromToc(pageTexts, pdf.numPages);
       const chapters = extractChapters(fullText);
       const sections = extractSections(fullText);
-      const units = extractUnits(fullText);
-
-      // 为每个课文计算起始页码
-      // 策略1（首选）：直接从目录条目的末尾提取页码（如 "2 周总理，你在哪里 / 柯岩 5" → 5）
-      // 策略2（兜底）：逐页搜索课文标题，跳过目录页
-      const tocPages = new Set();
-      for (let p = 0; p < pageTexts.length; p++) {
-        if (pageTexts[p].includes('目录')) tocPages.add(p);
-      }
-      const norm = s => s.replace(/[，。、；：！？""''（）《》\s,.;:!?'"'()<>*]/g, '');
-
-      units.forEach(u => {
-        u.lessons.forEach(l => {
-          // 策略1：提取标题末尾的页码（目录格式：课号 标题 / 作者 页码）
-          const pageMatch = l.title.match(/\s(\d{1,4})\s*$/);
-          let startPage = pageMatch ? parseInt(pageMatch[1], 10) : 0;
-
-          // 验证页码合理性：必须在 PDF 总页数范围内
-          if (startPage < 1 || startPage > pageTexts.length) {
-            // 策略2：逐页搜索课文标题（跳过目录页）
-            let coreTitle = l.title
-              .replace(/^\d+\*?\s*/, '')
-              .replace(/^第[一二三四五六七八九十百零\d]+课\s*/, '')
-              .replace(/\s*\/\s*[\u4e00-\u9fa5·]+.*$/, '')
-              .replace(/\s+\d+\s*$/, '')
-              .trim();
-            const normTitle = norm(coreTitle);
-            if (normTitle) {
-              for (let p = 0; p < pageTexts.length; p++) {
-                if (tocPages.has(p)) continue;
-                if (norm(pageTexts[p]).includes(normTitle)) {
-                  startPage = p + 1;
-                  break;
+      let units;
+      if (tocUnits && tocUnits.length > 0) {
+        units = tocUnits;
+        console.log('[教材解析] 使用目录页解析，共', units.length, '个单元');
+      } else {
+        units = extractUnits(fullText);
+        // 兜底：为旧方法提取的课文计算起始页
+        const norm = s => s.replace(/[，。、；：！？""''（）《》\s,.;:!?'"'()<>*]/g, '');
+        const tocPages = new Set();
+        for (let p = 0; p < pageTexts.length; p++) {
+          if (pageTexts[p].includes('目录')) tocPages.add(p);
+        }
+        units.forEach(u => {
+          u.lessons.forEach(l => {
+            const pageMatch = l.title.match(/\s(\d{1,4})\s*$/);
+            let startPage = pageMatch ? parseInt(pageMatch[1], 10) : 0;
+            if (startPage < 1 || startPage > pageTexts.length) {
+              let coreTitle = l.title.replace(/^\d+\*?\s*/, '').replace(/^第.+?课\s*/, '').replace(/\s*\/\s*[\u4e00-\u9fa5·]+.*$/, '').replace(/\s+\d+\s*$/, '').trim();
+              const normTitle = norm(coreTitle);
+              if (normTitle) {
+                for (let p = 0; p < pageTexts.length; p++) {
+                  if (tocPages.has(p)) continue;
+                  if (norm(pageTexts[p]).includes(normTitle)) { startPage = p + 1; break; }
                 }
               }
             }
-          }
-          l.startPage = startPage > 0 ? startPage : 1;
+            l.startPage = startPage > 0 ? startPage : 1;
+            l.endPage = l.startPage;
+          });
         });
-      });
+      }
 
       currentPdfData.chapters = chapters;
       currentPdfData.sections = sections;
@@ -1264,6 +1268,68 @@ function extractUnits(text) {
       if (content.length > 5) curUnit.lessons.push({ title: h.title, content });
     }
     units.push(curUnit);
+  }
+
+  return units.filter(u => u.lessons.length > 0);
+}
+
+// 专门从 PDF 目录页解析单元和课文（带页码），格式与原书目录完全一致
+function extractUnitsFromToc(pageTexts, totalPages) {
+  // 1. 找到目录页（包含"目录"字样的页面，通常在前几页）
+  const tocPageIndices = [];
+  for (let p = 0; p < pageTexts.length; p++) {
+    if (pageTexts[p].includes('目录')) tocPageIndices.push(p);
+  }
+  if (tocPageIndices.length === 0) return null; // 没有目录页，返回 null 让调用方用旧方法兜底
+
+  // 2. 合并所有目录页的文本行
+  const tocLines = [];
+  for (const pi of tocPageIndices) {
+    const lines = pageTexts[pi].split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && trimmed !== '目录') tocLines.push(trimmed);
+    }
+  }
+
+  // 3. 逐行解析：识别单元标题 vs 课文条目
+  const units = [];
+  let curUnit = null;
+  const unitRegex = /^第[一二三四五六七八九十百零\d]+(?:单元|章|节)/;
+  // 课文条目：课号 标题 [/ 作者] 页码
+  const lessonRegex = /^(\d+)\*?\s+(.+?)\s+(\d{1,4})$/;
+
+  for (const line of tocLines) {
+    if (unitRegex.test(line)) {
+      // 单元标题
+      curUnit = { title: line.substring(0, 60), lessons: [] };
+      units.push(curUnit);
+    } else {
+      const lm = line.match(lessonRegex);
+      if (lm) {
+        const [, num, rest, pageStr] = lm;
+        const startPage = parseInt(pageStr, 10);
+        if (startPage >= 1 && startPage <= totalPages) {
+          if (!curUnit) { curUnit = { title: '教材内容', lessons: [] }; units.push(curUnit); }
+          // 标题保留完整格式（去掉末尾页码），与目录显示一致
+          const displayTitle = `${num}${line.match(/^\d+\*?/)[0].endsWith('*') ? '*' : ''} ${rest}`;
+          curUnit.lessons.push({
+            title: displayTitle,
+            content: '',
+            startPage,
+          });
+        }
+      }
+    }
+  }
+
+  // 4. 为每篇课文计算结束页码（下一篇的起始页 - 1，最后一篇到 PDF 末尾）
+  const allLessons = [];
+  units.forEach(u => u.lessons.forEach(l => allLessons.push(l)));
+  for (let i = 0; i < allLessons.length; i++) {
+    const next = i + 1 < allLessons.length ? allLessons[i + 1].startPage : totalPages + 1;
+    allLessons[i].endPage = Math.max(allLessons[i].startPage, next - 1);
+    if (allLessons[i].endPage > totalPages) allLessons[i].endPage = totalPages;
   }
 
   return units.filter(u => u.lessons.length > 0);
