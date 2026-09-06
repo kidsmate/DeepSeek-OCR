@@ -896,20 +896,22 @@ function redeemWish(id) {
   const w = state.wishes.find(x => x.id === id);
   if (!w || w.granted) return;
   if (state.points < w.cost) { showToast('积分不足，继续努力吧！'); return; }
-  if (!confirm(`确定用 ${w.cost} 积分兑换「${w.name}」吗？`)) return;
-  state.points -= w.cost;
-  w.granted = true;
-  addRecord(state, 'redeem', `兑换心愿：${w.name}`, -w.cost);
-  saveData(state);
-  renderAll();
-  showToast(`🌟 心愿「${w.name}」已实现！`);
+  showConfirm(`确定用 ${w.cost} 积分兑换「${w.name}」吗？`, () => {
+    state.points -= w.cost;
+    w.granted = true;
+    addRecord(state, 'redeem', `兑换心愿：${w.name}`, -w.cost);
+    saveData(state);
+    renderAll();
+    showToast(`🌟 心愿「${w.name}」已实现！`);
+  });
 }
 
 function deleteWish(id) {
-  if (!confirm('确定删除这个心愿吗？')) return;
-  state.wishes = state.wishes.filter(w => w.id !== id);
-  saveData(state);
-  renderWishlist();
+  showConfirm('确定删除这个心愿吗？', () => {
+    state.wishes = state.wishes.filter(w => w.id !== id);
+    saveData(state);
+    renderWishlist();
+  });
 }
 
 // ============ 教材管理 ============
@@ -937,19 +939,37 @@ function renderTextbooks() {
   }).join('');
 }
 
+// 自定义确认弹窗（替代原生 confirm，移动端友好）
+function showConfirm(msg, onOk) {
+  const modal = document.getElementById('confirmModal');
+  const msgEl = document.getElementById('confirmMsg');
+  const okBtn = document.getElementById('confirmOk');
+  const cancelBtn = document.getElementById('confirmCancel');
+  if (msgEl) msgEl.textContent = msg;
+  modal.classList.add('show');
+  const cleanup = () => {
+    modal.classList.remove('show');
+    okBtn.onclick = null;
+    cancelBtn.onclick = null;
+  };
+  okBtn.onclick = () => { cleanup(); onOk && onOk(); };
+  cancelBtn.onclick = () => { cleanup(); };
+}
+
 function deleteTextbook(id) {
-  if (!confirm('确定删除该教材吗？删除后无法恢复。')) return;
-  state.textbooks = state.textbooks.filter(t => t.id !== id);
-  saveData(state);
-  renderTextbooks();
-  // 同时清理 IndexedDB 中的 PDF 数据
-  deletePdfFromDB(id).catch(err => console.warn('清理 PDF 缓存失败:', err));
-  // 清除 PDF.js 文档缓存
-  if (_pdfDocCache[id]) {
-    try { _pdfDocCache[id].destroy(); } catch(e) {}
-    delete _pdfDocCache[id];
-  }
-  showToast('教材已删除');
+  showConfirm('确定删除该教材吗？删除后无法恢复。', () => {
+    state.textbooks = state.textbooks.filter(t => t.id !== id);
+    saveData(state);
+    renderTextbooks();
+    // 同时清理 IndexedDB 中的 PDF 数据
+    deletePdfFromDB(id).catch(err => console.warn('清理 PDF 缓存失败:', err));
+    // 清除 PDF.js 文档缓存
+    if (_pdfDocCache[id]) {
+      try { _pdfDocCache[id].destroy(); } catch(e) {}
+      delete _pdfDocCache[id];
+    }
+    showToast('教材已删除');
+  });
 }
 
 // 弹窗中当前查看的教材
@@ -1274,13 +1294,17 @@ function extractUnits(text) {
 }
 
 // 专门从 PDF 目录页解析单元和课文（带页码），格式与原书目录完全一致
+// 同时计算"目录页码 → PDF 实际页码"的偏移量（因为 PDF 前面有封面/扉页等页面）
 function extractUnitsFromToc(pageTexts, totalPages) {
-  // 1. 找到目录页（包含"目录"字样的页面，通常在前几页）
+  // 1. 找到目录页（包含"目录"字样的页面）
   const tocPageIndices = [];
   for (let p = 0; p < pageTexts.length; p++) {
     if (pageTexts[p].includes('目录')) tocPageIndices.push(p);
   }
-  if (tocPageIndices.length === 0) return null; // 没有目录页，返回 null 让调用方用旧方法兜底
+  if (tocPageIndices.length === 0) return null;
+
+  const tocSet = new Set(tocPageIndices);
+  const norm = s => s.replace(/[，。、；：！？""''（）《》\s,.;:!?'"'()<>*·]/g, '');
 
   // 2. 合并所有目录页的文本行
   const tocLines = [];
@@ -1296,42 +1320,74 @@ function extractUnitsFromToc(pageTexts, totalPages) {
   const units = [];
   let curUnit = null;
   const unitRegex = /^第[一二三四五六七八九十百零\d]+(?:单元|章|节)/;
-  // 课文条目：课号 标题 [/ 作者] 页码
   const lessonRegex = /^(\d+)\*?\s+(.+?)\s+(\d{1,4})$/;
 
   for (const line of tocLines) {
     if (unitRegex.test(line)) {
-      // 单元标题
       curUnit = { title: line.substring(0, 60), lessons: [] };
       units.push(curUnit);
     } else {
       const lm = line.match(lessonRegex);
       if (lm) {
         const [, num, rest, pageStr] = lm;
-        const startPage = parseInt(pageStr, 10);
-        if (startPage >= 1 && startPage <= totalPages) {
+        const tocPage = parseInt(pageStr, 10);
+        if (tocPage >= 1 && tocPage <= totalPages + 20) { // 允许目录页码略超总页数（有偏移）
           if (!curUnit) { curUnit = { title: '教材内容', lessons: [] }; units.push(curUnit); }
-          // 标题保留完整格式（去掉末尾页码），与目录显示一致
-          const displayTitle = `${num}${line.match(/^\d+\*?/)[0].endsWith('*') ? '*' : ''} ${rest}`;
+          const star = line.match(/^\d+\*?/)[0].endsWith('*') ? '*' : '';
           curUnit.lessons.push({
-            title: displayTitle,
+            title: num + star + ' ' + rest,
             content: '',
-            startPage,
+            tocPage,        // 目录中标注的页码（教材页码）
+            _coreTitle: rest.replace(/\s*\/.*$/, '').trim(), // 用于搜索正文的核心标题
           });
         }
       }
     }
   }
 
-  // 4. 为每篇课文计算结束页码（下一篇的起始页 - 1，最后一篇到 PDF 末尾）
+  if (units.length === 0) return null;
+
+  // 4. 计算页码偏移量：用第一篇课文在 PDF 中实际出现的页面 减去 目录标注页码
   const allLessons = [];
   units.forEach(u => u.lessons.forEach(l => allLessons.push(l)));
+
+  let offset = 0;
+  for (const l of allLessons) {
+    const core = norm(l._coreTitle);
+    if (!core) continue;
+    // 在非目录页中搜索课文标题
+    let actualPage = -1;
+    for (let p = 0; p < pageTexts.length; p++) {
+      if (tocSet.has(p)) continue;
+      if (norm(pageTexts[p]).includes(core)) {
+        actualPage = p + 1;
+        break;
+      }
+    }
+    if (actualPage > 0) {
+      offset = actualPage - l.tocPage;
+      console.log('[目录校准] 课文:', l.title, '目录页码:', l.tocPage, '实际PDF页:', actualPage, '偏移量:', offset);
+      break; // 用第一篇能找到的课文校准
+    }
+  }
+
+  // 5. 应用偏移量，得到 PDF 实际页码
+  for (const l of allLessons) {
+    l.startPage = l.tocPage + offset;
+    if (l.startPage < 1) l.startPage = 1;
+    if (l.startPage > totalPages) l.startPage = totalPages;
+    delete l._coreTitle;
+    delete l.tocPage;
+  }
+
+  // 6. 计算每篇课文的结束页码
   for (let i = 0; i < allLessons.length; i++) {
     const next = i + 1 < allLessons.length ? allLessons[i + 1].startPage : totalPages + 1;
     allLessons[i].endPage = Math.max(allLessons[i].startPage, next - 1);
     if (allLessons[i].endPage > totalPages) allLessons[i].endPage = totalPages;
   }
 
+  console.log('[目录解析] 偏移量:', offset, '单元数:', units.length, '课文数:', allLessons.length);
   return units.filter(u => u.lessons.length > 0);
 }
 
@@ -1545,12 +1601,12 @@ function setupEventListeners() {
   document.getElementById('settingNickname').addEventListener('change', saveSettings);
   document.getElementById('settingDailyGoal').addEventListener('change', saveSettings);
   document.getElementById('btnReset').addEventListener('click', () => {
-    if (confirm('确定要重置所有数据吗？此操作不可恢复！')) {
+    showConfirm('确定要重置所有数据吗？此操作不可恢复！', () => {
       resetData();
       state = loadData();
       renderAll();
       showToast('数据已重置');
-    }
+    });
   });
   document.getElementById('btnExport').addEventListener('click', exportData);
 
