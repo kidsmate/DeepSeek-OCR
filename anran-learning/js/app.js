@@ -1090,8 +1090,7 @@ function handlePdfUpload(file) {
         document.getElementById('pdfProgressFill').style.width = (40 + (i / pdf.numPages) * 50) + '%';
       }
 
-      // 优先从目录页解析单元/课文（格式与原书目录一致，且自带准确页码）
-      // 若没有目录页，再用旧方法从全文提取
+      // 只从目录页解析单元/课文，不再从全文提取（避免产生无关内容）
       const tocUnits = extractUnitsFromToc(pageTexts, pdf.numPages);
       const chapters = extractChapters(fullText);
       const sections = extractSections(fullText);
@@ -1100,31 +1099,9 @@ function handlePdfUpload(file) {
         units = tocUnits;
         console.log('[教材解析] 使用目录页解析，共', units.length, '个单元');
       } else {
-        units = extractUnits(fullText);
-        // 兜底：为旧方法提取的课文计算起始页
-        const norm = s => s.replace(/[，。、；：！？""''（）《》\s,.;:!?'"'()<>*]/g, '');
-        const tocPages = new Set();
-        for (let p = 0; p < pageTexts.length; p++) {
-          if (pageTexts[p].includes('目录')) tocPages.add(p);
-        }
-        units.forEach(u => {
-          u.lessons.forEach(l => {
-            const pageMatch = l.title.match(/\s(\d{1,4})\s*$/);
-            let startPage = pageMatch ? parseInt(pageMatch[1], 10) : 0;
-            if (startPage < 1 || startPage > pageTexts.length) {
-              let coreTitle = l.title.replace(/^\d+\*?\s*/, '').replace(/^第.+?课\s*/, '').replace(/\s*\/\s*[\u4e00-\u9fa5·]+.*$/, '').replace(/\s+\d+\s*$/, '').trim();
-              const normTitle = norm(coreTitle);
-              if (normTitle) {
-                for (let p = 0; p < pageTexts.length; p++) {
-                  if (tocPages.has(p)) continue;
-                  if (norm(pageTexts[p]).includes(normTitle)) { startPage = p + 1; break; }
-                }
-              }
-            }
-            l.startPage = startPage > 0 ? startPage : 1;
-            l.endPage = l.startPage;
-          });
-        });
+        // 目录解析失败时，只创建一个"教材全文"条目，不提取无关内容
+        units = [{ title: '教材内容', lessons: [{ title: '教材全文', content: fullText, startPage: 1, endPage: pdf.numPages }] }];
+        console.log('[教材解析] 目录解析失败，仅保留教材全文');
       }
 
       currentPdfData.chapters = chapters;
@@ -1320,10 +1297,17 @@ function extractUnitsFromToc(pageTexts, totalPages) {
   for (let p = 0; p < pageTexts.length; p++) {
     if (pageTexts[p].includes('目录')) tocPageIndices.push(p);
   }
-  if (tocPageIndices.length === 0) return null;
+  if (tocPageIndices.length === 0) {
+    console.log('[目录解析] 未找到目录页');
+    return null;
+  }
+  console.log('[目录解析] 找到目录页:', tocPageIndices.map(p => p+1));
 
   const tocSet = new Set(tocPageIndices);
   const norm = s => s.replace(/[，。、；：！？""''（）《》\s,.;:!?'"'()<>*·]/g, '');
+
+  // 排除关键词：这些不是课文条目
+  const excludeKeywords = ['任务', '写作', '名著导读', '综合性学习', '课外古诗词', '诵读', '活动', '探究', '阅读', '单元', '章', '节'];
 
   // 2. 合并所有目录页的文本行
   const tocLines = [];
@@ -1334,36 +1318,43 @@ function extractUnitsFromToc(pageTexts, totalPages) {
       if (trimmed && trimmed !== '目录') tocLines.push(trimmed);
     }
   }
+  console.log('[目录解析] 目录页共', tocLines.length, '行文本');
 
   // 3. 逐行解析：识别单元标题 vs 课文条目
   const units = [];
   let curUnit = null;
   const unitRegex = /^第[一二三四五六七八九十百零\d]+(?:单元|章|节)/;
-  // 课文条目：课号 标题 [/ 作者] [页码]，页码可能没有
-  const lessonRegex = /^(\d+)\*?\s+(.+?)(?:\s+\d{1,4})?$/;
+  // 课文条目：阿拉伯数字课号 + 标题（中文开头）+ 可选作者 + 可选页码
+  // 例如："1 沁园春·雪 / 毛泽东 3" 或 "10* 精神的三间小屋 44"
+  const lessonRegex = /^(\d+)\*?\s+([\u4e00-\u9fa5][^\n]{1,40}?)(?:\s+\d{1,4})?$/;
 
   for (const line of tocLines) {
     if (unitRegex.test(line)) {
+      // 单元标题
       curUnit = { title: line.substring(0, 60), lessons: [] };
       units.push(curUnit);
+      console.log('[目录解析] 新单元:', curUnit.title);
     } else {
       const lm = line.match(lessonRegex);
       if (lm) {
         const [, num, rest] = lm;
         // 去掉作者信息（/ 作者），保留纯标题用于搜索
         const coreTitle = rest.replace(/\s*\/.*$/, '').trim();
-        if (coreTitle.length < 2) continue;
+        // 排除非课文条目
+        const isExcluded = excludeKeywords.some(kw => coreTitle.includes(kw) || line.includes(kw));
+        if (coreTitle.length < 2 || isExcluded) continue;
         if (!curUnit) { curUnit = { title: '教材内容', lessons: [] }; units.push(curUnit); }
         const star = line.match(/^\d+\*?/)[0].endsWith('*') ? '*' : '';
         curUnit.lessons.push({
-          title: num + star + ' ' + rest,  // 显示用完整标题
+          title: num + star + ' ' + rest,
           content: '',
-          _coreTitle: coreTitle,            // 搜索用核心标题
+          _coreTitle: coreTitle,
         });
       }
     }
   }
 
+  console.log('[目录解析] 提取到', units.length, '个单元，共', units.reduce((s,u)=>s+u.lessons.length,0), '篇课文');
   if (units.length === 0) return null;
 
   // 4. 逐篇搜索正文，找到每篇课文的实际 PDF 物理页码
@@ -1375,9 +1366,9 @@ function extractUnitsFromToc(pageTexts, totalPages) {
     let actualPage = -1;
     if (core) {
       for (let p = 0; p < pageTexts.length; p++) {
-        if (tocSet.has(p)) continue; // 跳过目录页
+        if (tocSet.has(p)) continue;
         if (norm(pageTexts[p]).includes(core)) {
-          actualPage = p + 1; // 1-based 页码
+          actualPage = p + 1;
           break;
         }
       }
@@ -1394,7 +1385,6 @@ function extractUnitsFromToc(pageTexts, totalPages) {
     if (allLessons[i].endPage > totalPages) allLessons[i].endPage = totalPages;
   }
 
-  console.log('[目录解析] 单元数:', units.length, '课文数:', allLessons.length);
   return units.filter(u => u.lessons.length > 0);
 }
 
