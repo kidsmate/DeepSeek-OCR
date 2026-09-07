@@ -1306,8 +1306,8 @@ function extractUnitsFromToc(pageTexts, totalPages) {
   const tocSet = new Set(tocPageIndices);
   const norm = s => s.replace(/[，。、；：！？""''（）《》\s,.;:!?'"'()<>*·]/g, '');
 
-  // 排除关键词：这些不是课文条目
-  const excludeKeywords = ['任务', '写作', '名著导读', '综合性学习', '课外古诗词', '诵读', '活动', '探究', '阅读', '单元', '章', '节'];
+  // 排除关键词：这些不是课文条目（只检查核心标题，不检查整行）
+  const excludeKeywords = ['任务', '写作', '名著导读', '综合性学习', '课外古诗词', '诵读', '口语交际', '综合性'];
 
   // 2. 合并所有目录页的文本行
   const tocLines = [];
@@ -1324,9 +1324,9 @@ function extractUnitsFromToc(pageTexts, totalPages) {
   const units = [];
   let curUnit = null;
   const unitRegex = /^第[一二三四五六七八九十百零\d]+(?:单元|章|节)/;
-  // 课文条目：阿拉伯数字课号 + 标题（中文开头）+ 可选作者 + 可选页码
-  // 例如："1 沁园春·雪 / 毛泽东 3" 或 "10* 精神的三间小屋 44"
-  const lessonRegex = /^(\d+)\*?\s+([\u4e00-\u9fa5][^\n]{1,40}?)(?:\s+\d{1,4})?$/;
+  // 课文条目：阿拉伯数字课号 + 中文标题 + 可选作者 + 可选页码
+  // 放宽匹配：不限制标题长度，只要数字+空格+中文开头即可
+  const lessonRegex = /^(\d+)\*?\s+([\u4e00-\u9fa5].*?)(?:\s+\d{1,4})?$/;
 
   for (const line of tocLines) {
     if (unitRegex.test(line)) {
@@ -1340,8 +1340,8 @@ function extractUnitsFromToc(pageTexts, totalPages) {
         const [, num, rest] = lm;
         // 去掉作者信息（/ 作者），保留纯标题用于搜索
         const coreTitle = rest.replace(/\s*\/.*$/, '').trim();
-        // 排除非课文条目
-        const isExcluded = excludeKeywords.some(kw => coreTitle.includes(kw) || line.includes(kw));
+        // 排除非课文条目（只检查核心标题）
+        const isExcluded = excludeKeywords.some(kw => coreTitle.includes(kw));
         if (coreTitle.length < 2 || isExcluded) continue;
         if (!curUnit) { curUnit = { title: '教材内容', lessons: [] }; units.push(curUnit); }
         const star = line.match(/^\d+\*?/)[0].endsWith('*') ? '*' : '';
