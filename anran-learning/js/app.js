@@ -1022,7 +1022,10 @@ function viewTextbook(id) {
   const units = t.units && t.units.length ? t.units : null;
   const sections = t.sections || [];
   const totalLessons = units ? units.reduce((s, u) => s + u.lessons.length, 0) : sections.length;
-  let html = `<h3 style="margin-bottom:8px;">${t.name}</h3>
+  let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+    <h3 style="margin:0;">${t.name}</h3>
+    <button class="btn-secondary btn-sm" onclick="openTocEditor('${t.id}')">✏️ 编辑目录</button>
+  </div>
     <div style="color:var(--text-light);font-size:13px;margin-bottom:16px;">${t.subject || '未分类'} · ${units ? units.length + ' 个单元' : sections.length + ' 个章节'} · ${totalLessons} 篇课文 · ${formatSize(t.size)} · ${formatTime(t.uploadTime)}</div>`;
   
   if (units || sections.length > 0) {
@@ -1050,6 +1053,232 @@ function viewTextbook(id) {
   const modalFooter = document.querySelector('#knowledgeModal .modal-footer');
   if (modalFooter) modalFooter.style.display = 'none';
   document.getElementById('knowledgeModal').classList.add('show');
+}
+
+// ============ 目录手动编辑器 ============
+// 确保教材有 units 结构
+function ensureUnits(textbook) {
+  if (!textbook.units || !Array.isArray(textbook.units)) {
+    textbook.units = [];
+  }
+  for (const u of textbook.units) {
+    if (!u.lessons || !Array.isArray(u.lessons)) u.lessons = [];
+  }
+  return textbook.units;
+}
+
+// 打开目录编辑器
+function openTocEditor(textbookId) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t) return;
+  ensureUnits(t);
+  renderTocEditor(textbookId);
+}
+
+function renderTocEditor(textbookId) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t) return;
+  const units = t.units;
+
+  let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <h3 style="margin:0;">📑 编辑目录</h3>
+    <button class="btn-primary btn-sm" onclick="viewTextbook('${textbookId}')">← 返回阅读</button>
+  </div>`;
+
+  html += `<div style="background:#FFF8E1;border:1px solid #FFE082;border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#795548;">
+    💡 手动编辑目录结构：单元（一级）→ 栏目（二级，如阅读/写作）→ 课文（三级，需填页码）。点击"添加"按钮新增，点击"×"删除，直接在输入框修改标题和页码。
+  </div>`;
+
+  units.forEach((u, ui) => {
+    html += `<div class="toc-edit-unit">`;
+    // 单元标题
+    html += `<div class="toc-edit-row toc-edit-unit-row">
+      <span class="toc-edit-label">单元</span>
+      <input class="toc-edit-input" value="${escapeHtml(u.title)}" onchange="tocUpdateUnit('${textbookId}', ${ui}, 'title', this.value)" placeholder="单元标题，如：第一单元">
+      <button class="toc-edit-btn del" onclick="tocDeleteUnit('${textbookId}', ${ui})" title="删除单元">×</button>
+    </div>`;
+
+    // 栏目和课文
+    u.lessons.forEach((l, li) => {
+      const isGroup = l.type === 'group';
+      html += `<div class="toc-edit-row ${isGroup ? 'toc-edit-group-row' : 'toc-edit-lesson-row'}">
+        <span class="toc-edit-label">${isGroup ? '栏目' : '课文'}</span>
+        <input class="toc-edit-input" value="${escapeHtml(l.title)}" onchange="tocUpdateLesson('${textbookId}', ${ui}, ${li}, 'title', this.value)" placeholder="${isGroup ? '栏目名，如：阅读' : '课文名，如：1 春'}">
+        ${isGroup ? '' : `<input class="toc-edit-input toc-edit-page" type="number" min="1" value="${l.startPage || ''}" onchange="tocUpdateLesson('${textbookId}', ${ui}, ${li}, 'startPage', this.value)" placeholder="页码">`}
+        <button class="toc-edit-btn type" onclick="tocToggleLessonType('${textbookId}', ${ui}, ${li})" title="切换栏目/课文">${isGroup ? '📖' : '📁'}</button>
+        <button class="toc-edit-btn del" onclick="tocDeleteLesson('${textbookId}', ${ui}, ${li})" title="删除">×</button>
+      </div>`;
+    });
+
+    // 添加按钮
+    html += `<div class="toc-edit-add-row">
+      <button class="btn-secondary btn-sm" onclick="tocAddLesson('${textbookId}', ${ui}, 'group')">+ 栏目</button>
+      <button class="btn-secondary btn-sm" onclick="tocAddLesson('${textbookId}', ${ui}, 'lesson')">+ 课文</button>
+    </div>`;
+    html += `</div>`;
+  });
+
+  // 添加单元
+  html += `<button class="btn-primary" style="width:100%;margin-top:12px;" onclick="tocAddUnit('${textbookId}')">+ 添加单元</button>`;
+
+  // 操作按钮
+  html += `<div style="display:flex;gap:10px;margin-top:16px;">
+    <button class="btn-primary" style="flex:1;" onclick="tocSave('${textbookId}')">✓ 保存目录</button>
+    <button class="btn-secondary" style="flex:1;" onclick="tocAutoExtract('${textbookId}')">🔄 重新自动提取</button>
+  </div>`;
+
+  document.getElementById('kpTitle').textContent = '编辑目录';
+  document.getElementById('kpBody').innerHTML = html;
+}
+
+// 单元操作
+function tocAddUnit(textbookId) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t) return;
+  ensureUnits(t);
+  t.units.push({ title: '新单元', lessons: [] });
+  saveData(state);
+  renderTocEditor(textbookId);
+}
+
+function tocDeleteUnit(textbookId, ui) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t) return;
+  t.units.splice(ui, 1);
+  saveData(state);
+  renderTocEditor(textbookId);
+}
+
+function tocUpdateUnit(textbookId, ui, field, value) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t || !t.units[ui]) return;
+  t.units[ui][field] = value;
+  saveData(state);
+}
+
+// 课文/栏目操作
+function tocAddLesson(textbookId, ui, type) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t || !t.units[ui]) return;
+  const newItem = type === 'group' 
+    ? { title: '新栏目', type: 'group' }
+    : { title: '新课文', type: 'lesson', startPage: 1 };
+  t.units[ui].lessons.push(newItem);
+  saveData(state);
+  renderTocEditor(textbookId);
+}
+
+function tocDeleteLesson(textbookId, ui, li) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t || !t.units[ui]) return;
+  t.units[ui].lessons.splice(li, 1);
+  saveData(state);
+  renderTocEditor(textbookId);
+}
+
+function tocUpdateLesson(textbookId, ui, li, field, value) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t || !t.units[ui] || !t.units[ui].lessons[li]) return;
+  if (field === 'startPage') value = parseInt(value) || 0;
+  t.units[ui].lessons[li][field] = value;
+  saveData(state);
+}
+
+function tocToggleLessonType(textbookId, ui, li) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t || !t.units[ui] || !t.units[ui].lessons[li]) return;
+  const l = t.units[ui].lessons[li];
+  if (l.type === 'group') {
+    l.type = 'lesson';
+    l.startPage = l.startPage || 1;
+  } else {
+    l.type = 'group';
+    delete l.startPage;
+    delete l.endPage;
+  }
+  saveData(state);
+  renderTocEditor(textbookId);
+}
+
+// 保存并返回阅读页
+function tocSave(textbookId) {
+  // 重新计算 endPage
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (t) {
+    const allLessons = [];
+    t.units.forEach(u => u.lessons.forEach(l => { if (l.type === 'lesson') allLessons.push(l); }));
+    for (let i = 0; i < allLessons.length; i++) {
+      const next = i + 1 < allLessons.length ? (allLessons[i + 1].startPage || 1) : 9999;
+      allLessons[i].endPage = Math.max(allLessons[i].startPage || 1, next - 1);
+    }
+    saveData(state);
+  }
+  showToast('目录已保存');
+  viewTextbook(textbookId);
+}
+
+// 重新自动提取（需重新解析 PDF）
+async function tocAutoExtract(textbookId) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t) return;
+  if (!t.hasPdf) {
+    showToast('该教材没有 PDF 文件，无法自动提取');
+    return;
+  }
+  showToast('正在重新提取目录...');
+  try {
+    const arrayBuffer = await loadPdfFromDB(textbookId);
+    if (!arrayBuffer) {
+      showToast('PDF 文件已丢失，请重新上传');
+      return;
+    }
+    const data = new Uint8Array(arrayBuffer.slice(0));
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    // 提取文本
+    const pageTexts = [];
+    let fullText = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const lines = [];
+      const yMap = {};
+      for (const item of textContent.items) {
+        const y = Math.round(item.transform[5]);
+        let lineKey = y;
+        for (const key of Object.keys(yMap)) {
+          if (Math.abs(parseInt(key) - y) <= 3) { lineKey = parseInt(key); break; }
+        }
+        if (!yMap[lineKey]) yMap[lineKey] = [];
+        yMap[lineKey].push({ x: item.transform[4], str: item.str });
+      }
+      const sortedYs = Object.keys(yMap).map(Number).sort((a, b) => b - a);
+      for (const y of sortedYs) {
+        const line = yMap[y].sort((a, b) => a.x - b.x).map(it => it.str).join('').trim();
+        if (line) lines.push(line);
+      }
+      pageTexts.push(lines.join('\n'));
+      fullText += lines.join('\n') + '\n\n';
+    }
+    // 提取目录
+    let units;
+    try {
+      const outline = await pdf.getOutline();
+      if (outline && outline.length > 0) {
+        units = await extractUnitsFromOutline(pdf, outline, pdf.numPages);
+      }
+    } catch (e) {}
+    const hasLessons = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
+    if (!hasLessons) {
+      units = extractLessonsWithPages(fullText, pageTexts, pdf.numPages);
+    }
+    t.units = units;
+    saveData(state);
+    showToast(`重新提取完成：${units.length} 个单元`);
+    renderTocEditor(textbookId);
+  } catch (err) {
+    console.error(err);
+    showToast('提取失败：' + (err.message || '未知错误'));
+  }
 }
 
 // PDF 处理

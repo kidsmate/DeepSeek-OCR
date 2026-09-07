@@ -1435,6 +1435,84 @@ html, body {
   color: var(--text-light);
 }
 
+/* 目录编辑器 */
+.toc-edit-unit {
+  background: #F5F5FA;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+}
+
+.toc-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.toc-edit-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  width: 36px;
+  text-align: center;
+}
+
+.toc-edit-unit-row .toc-edit-label { background: var(--primary); }
+.toc-edit-group-row .toc-edit-label { background: #FF9800; }
+.toc-edit-lesson-row .toc-edit-label { background: #4CAF50; }
+
+.toc-edit-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  background: white;
+}
+
+.toc-edit-page {
+  flex: 0 0 70px;
+  width: 70px;
+}
+
+.toc-edit-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.toc-edit-btn.del {
+  background: #FFEBEE;
+  color: #E53935;
+}
+.toc-edit-btn.del:hover { background: #E53935; color: white; }
+
+.toc-edit-btn.type {
+  background: #E3F2FD;
+}
+.toc-edit-btn.type:hover { background: #2196F3; }
+
+.toc-edit-add-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  padding-left: 44px;
+}
+
 .tb-toc-unit-label {
   font-weight: 700;
   font-size: 13px;
