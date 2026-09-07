@@ -1720,8 +1720,8 @@ async function extractUnitsFromOutline(pdf, outline, totalPages) {
   const groupKeywords = ['阅读', '写作', '任务', '综合性学习', '课外古诗词', '名著导读', '口语交际', '活动·探究', '诵读'];
   // 跳过非内容的顶级标题
   const skipTopTitles = ['封面', '目录', '附录', '前言', '后记', '版权页', '扉页', '编者', '编写'];
-  // 单元匹配模式
-  const unitPattern = /第[一二三四五六七八九十百零〇两0-9]+(?:单元|章|节|部分|编)/;
+  // 单元匹配模式（支持多种教材格式）
+  const unitPattern = /(?:第[一二三四五六七八九十百零〇两0-9]+(?:单元|章|节|部分|编|组)|Unit\s*\d+|单元\s*[一二三四五六七八九十百零〇两0-9]+|第\s*[一二三四五六七八九十百零〇两0-9]+\s*单元)/;
 
   // 递归查找所有匹配单元模式的节点
   function findUnitNodes(nodes, depth = 0) {
@@ -1842,7 +1842,8 @@ function autoExtractToc(pageTexts, totalPages, fullText) {
   console.log('[自动提取] 总行数:', allLines.length);
 
   // === 第一步：识别所有单元 ===
-  const unitRegex = /^第[一二三四五六七八九十百零〇两0-9]+(?:单元|章|部分|编)/;
+  // 支持多种单元命名格式：第X单元/章/节/部分/编/组、Unit X、单元X
+  const unitRegex = /(?:第[一二三四五六七八九十百零〇两0-9]+(?:单元|章|节|部分|编|组)|Unit\s*\d+|单元\s*[一二三四五六七八九十百零〇两0-9]+|第\s*[一二三四五六七八九十百零〇两0-9]+\s*单元)/;
   const units = [];
   let curUnit = null;
   const unitSeen = new Set();
@@ -1850,7 +1851,7 @@ function autoExtractToc(pageTexts, totalPages, fullText) {
   for (const { page, text } of allLines) {
     const m = text.match(unitRegex);
     if (m) {
-      const title = m[0];
+      const title = m[0].trim();
       if (!unitSeen.has(title)) {
         unitSeen.add(title);
         curUnit = { title, page, lessons: [] };
@@ -1858,6 +1859,35 @@ function autoExtractToc(pageTexts, totalPages, fullText) {
         console.log('[自动提取] 单元:', title, '→ 第', page, '页');
       } else {
         curUnit = units.find(u => u.title === title);
+      }
+    }
+  }
+
+  // 兜底：如果没找到单元，但找到课文，则按课文编号重置推断单元
+  if (units.length === 0) {
+    console.log('[自动提取] 未匹配到单元标题，尝试按课文编号重置推断单元...');
+    const lessonLines = allLines.filter(l => /^\d+\*?\s+/.test(l.text) || /^[一二三四五六七八九十]+[、.．]/.test(l.text));
+    if (lessonLines.length > 0) {
+      let unitIdx = 1;
+      let prevNum = 0;
+      for (const { page, text } of lessonLines) {
+        const numMatch = text.match(/^(\d+)\*?/);
+        const cnMatch = text.match(/^([一二三四五六七八九十]+)/);
+        let num = 0;
+        if (numMatch) num = parseInt(numMatch[1]);
+        else if (cnMatch) num = ['一','二','三','四','五','六','七','八','九','十'].indexOf(cnMatch[1]) + 1;
+        // 编号变小或重置 → 新单元
+        if (num <= prevNum && num > 0) {
+          unitIdx++;
+        }
+        if (num > 0) prevNum = num;
+        const unitTitle = `第${['一','二','三','四','五','六','七','八','九','十','十一','十二'][unitIdx-1] || unitIdx}单元`;
+        let u = units.find(x => x.title === unitTitle);
+        if (!u) {
+          u = { title: unitTitle, page, lessons: [] };
+          units.push(u);
+          console.log('[自动提取] 推断单元:', unitTitle, '→ 第', page, '页');
+        }
       }
     }
   }
