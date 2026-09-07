@@ -1317,14 +1317,17 @@ function extractLessonsWithPages(fullText, pageTexts, totalPages) {
     }
   }
   console.log('[目录解析] 目录页行数:', tocLines.length);
+  // 打印前 30 行原始文本，便于调试
+  console.log('[目录解析] 前30行原始文本:');
+  tocLines.slice(0, 30).forEach((l, i) => console.log(`  [${i}] ${l}`));
 
   // 3. 从目录页文本中提取单元、栏目、文章（处理合并行）
   const units = [];
   let curUnit = null;
   const groupKeywords = ['阅读', '写作', '任务', '综合性学习', '课外古诗词', '名著导读', '口语交际', '活动·探究'];
   const unitRegex = /第[一二三四五六七八九十百零\d]+(?:单元|章|节)/;
-  // 文章：数字 + 标题 + 可选/作者 + 可选页码
-  const lessonRegex = /(\d+)\*?\s+([\u4e00-\u9fa5][^0-9]{1,30}?)(?:\s+\/\s*[\u4e00-\u9fa5·]+)?(?:\s+(\d{1,4}))?/g;
+  // 文章：数字 + 标题 + 可选/作者 + 可选页码（放宽：数字和标题之间可以没有空格）
+  const lessonRegex = /(\d+)\*?\s*([\u4e00-\u9fa5][\u4e00-\u9fa5a-zA-Z·\s]{1,20}?)(?:\s*\/\s*[\u4e00-\u9fa5·]+)?(?:\s*\d{1,4})?/g;
 
   for (const line of tocLines) {
     // 检查是否包含单元标题
