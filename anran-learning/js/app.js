@@ -503,6 +503,8 @@ function renderBookReader(units, ti, point) {
 
   // ===== 右侧正文 =====
   html += `<div class="tb-content" id="tb-content-${ti}">`;
+  // 提前获取教材对象（偏移量控件需要用）
+  const textbook = window._renderedTextbook && window._renderedTextbook[ti];
   if (allLessons.length > 0) {
     const cur = allLessons[flatIdx];
     html += `<div class="tb-content-header">`;
@@ -544,7 +546,6 @@ function renderBookReader(units, ti, point) {
   window._tbSelection[ti] = { flatIdx };
 
   // 存储教材 ID 和是否有 PDF
-  const textbook = window._renderedTextbook && window._renderedTextbook[ti];
   window._tbTextbookId = window._tbTextbookId || {};
   window._tbHasPdf = window._tbHasPdf || {};
   window._tbTextbookId[ti] = textbook ? textbook.id : null;
