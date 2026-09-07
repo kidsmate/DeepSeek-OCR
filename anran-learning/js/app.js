@@ -1288,69 +1288,103 @@ function extractUnits(text) {
   return units.filter(u => u.lessons.length > 0);
 }
 
-// 统一课文提取方案：从全文提取并识别三级结构
-// 一级：第X单元（从全文匹配）
-// 二级：阅读/写作/任务等栏目（关键词识别）
-// 三级：数字开头的文章（可点击跳转）
+// 统一课文提取方案：仅从 PDF 目录页解析，处理文本合并行
+// 一级：第X单元
+// 二级：阅读/写作/任务等栏目
+// 三级：数字开头的文章
 function extractLessonsWithPages(fullText, pageTexts, totalPages) {
   const norm = s => s.replace(/[，。、；：！？""''（）《》\s,.;:!?'"'()<>*·]/g, '');
 
-  // 目录页集合（搜索正文时跳过）
-  const tocSet = new Set();
+  // 1. 找到目录页
+  const tocPageIndices = [];
   for (let p = 0; p < pageTexts.length; p++) {
-    if (pageTexts[p].includes('目录')) tocSet.add(p);
+    if (pageTexts[p].includes('目录')) tocPageIndices.push(p);
+  }
+  const tocSet = new Set(tocPageIndices);
+  console.log('[目录解析] 目录页:', tocPageIndices.map(p => p + 1));
+
+  if (tocPageIndices.length === 0) {
+    // 没有目录页，回退到简单提取
+    return [{ title: '教材内容', lessons: [{ title: '教材全文', content: fullText, startPage: 1, endPage: totalPages, type: 'lesson' }] }];
   }
 
-  // 二级栏目关键词
-  const groupKeywords = ['阅读', '写作', '任务', '综合性学习', '课外古诗词', '名著导读', '口语交际', '活动·探究', '诵读'];
-  const unitRegex = /^第[一二三四五六七八九十百零\d]+(?:单元|章|节)/;
-  const lessonRegex = /^(\d+)\*?\s+([\u4e00-\u9fa5].*?)(?:\s+\d{1,4})?$/;
+  // 2. 收集目录页所有文本行
+  const tocLines = [];
+  for (const pi of tocPageIndices) {
+    for (const line of pageTexts[pi].split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed && trimmed !== '目录') tocLines.push(trimmed);
+    }
+  }
+  console.log('[目录解析] 目录页行数:', tocLines.length);
 
-  // 1. 从全文逐行扫描，按顺序识别单元/栏目/文章
+  // 3. 从目录页文本中提取单元、栏目、文章（处理合并行）
   const units = [];
   let curUnit = null;
-  const seenCores = new Set();
-  const lines = fullText.split('\n');
+  const groupKeywords = ['阅读', '写作', '任务', '综合性学习', '课外古诗词', '名著导读', '口语交际', '活动·探究'];
+  const unitRegex = /第[一二三四五六七八九十百零\d]+(?:单元|章|节)/;
+  // 文章：数字 + 标题 + 可选/作者 + 可选页码
+  const lessonRegex = /(\d+)\*?\s+([\u4e00-\u9fa5][^0-9]{1,30}?)(?:\s+\/\s*[\u4e00-\u9fa5·]+)?(?:\s+(\d{1,4}))?/g;
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    if (unitRegex.test(line)) {
-      // 一级：单元
-      curUnit = { title: line.substring(0, 60), lessons: [] };
+  for (const line of tocLines) {
+    // 检查是否包含单元标题
+    const unitMatch = line.match(unitRegex);
+    if (unitMatch) {
+      // 找到行中单元标题后面的部分，检查是否有栏目
+      const unitEnd = unitMatch.index + unitMatch[0].length;
+      const afterUnit = line.substring(unitEnd).trim();
+      curUnit = { title: unitMatch[0], lessons: [] };
       units.push(curUnit);
-    } else if (curUnit) {
-      const lm = line.match(lessonRegex);
-      if (lm) {
-        // 三级：文章
-        const [, num, rest] = lm;
-        const coreTitle = rest.replace(/\s*\/.*$/, '').trim();
-        if (coreTitle.length < 2) continue;
-        const core = norm(coreTitle);
-        if (!core || seenCores.has(core)) continue;
-        seenCores.add(core);
-        const star = line.match(/^\d+\*?/)[0].endsWith('*') ? '*' : '';
-        curUnit.lessons.push({
-          title: num + star + ' ' + rest,
-          type: 'lesson',
-          _coreTitle: core,
-        });
-      } else {
-        // 二级：栏目
-        const isGroup = groupKeywords.some(kw => line.includes(kw));
-        if (isGroup) {
-          curUnit.lessons.push({ title: line.substring(0, 60), type: 'group' });
+
+      // 如果单元标题后面紧跟栏目（如"第一单元阅读"），提取栏目
+      for (const kw of groupKeywords) {
+        if (afterUnit.startsWith(kw)) {
+          curUnit.lessons.push({ title: kw, type: 'group' });
+          break;
         }
+      }
+    }
+
+    // 提取文章（可能在同一行有多个，或在独立行）
+    let lm;
+    lessonRegex.lastIndex = 0;
+    while ((lm = lessonRegex.exec(line)) !== null) {
+      const [, num, title] = lm;
+      const coreTitle = title.replace(/\s*\/.*$/, '').trim();
+      if (coreTitle.length < 2) continue;
+      if (!curUnit) { curUnit = { title: '教材内容', lessons: [] }; units.push(curUnit); }
+      const star = lm[0].includes('*') ? '*' : '';
+      curUnit.lessons.push({
+        title: num + star + ' ' + coreTitle,
+        type: 'lesson',
+        _coreTitle: coreTitle,
+      });
+    }
+
+    // 如果不是单元行也没有文章，检查是否是独立的栏目行
+    if (!unitMatch) {
+      const isGroup = groupKeywords.some(kw => line.startsWith(kw) || line === kw);
+      if (isGroup && curUnit) {
+        curUnit.lessons.push({ title: line.substring(0, 40), type: 'group' });
       }
     }
   }
 
   console.log('[目录解析] 单元数:', units.length);
-  const totalBefore = units.reduce((s,u)=>s+u.lessons.filter(l=>l.type==='lesson').length,0);
-  console.log('[目录解析] 提取文章数:', totalBefore);
 
-  // 2. 为每篇文章定位实际 PDF 页码
+  // 4. 去重：同一单元内相同标题只保留一个
+  for (const u of units) {
+    const seen = new Set();
+    u.lessons = u.lessons.filter(l => {
+      if (l.type !== 'lesson') return true;
+      const key = norm(l._coreTitle);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  // 5. 为每篇文章定位实际 PDF 页码
   const allLessons = [];
   units.forEach(u => u.lessons.forEach(l => { if (l.type === 'lesson') allLessons.push(l); }));
 
@@ -1371,12 +1405,12 @@ function extractLessonsWithPages(fullText, pageTexts, totalPages) {
     if (actualPage > 0) console.log('[页码定位]', l.title, '→ 第', actualPage, '页');
   }
 
-  // 3. 移除找不到正文的文章（可能是页眉页脚或目录重复）
+  // 6. 移除找不到正文的文章
   for (const u of units) {
     u.lessons = u.lessons.filter(l => l.type === 'group' || l.startPage > 0);
   }
 
-  // 4. 计算 endPage = 下一篇文章 startPage - 1
+  // 7. 计算 endPage
   const validLessons = [];
   units.forEach(u => u.lessons.forEach(l => { if (l.type === 'lesson') validLessons.push(l); }));
   for (let i = 0; i < validLessons.length; i++) {
@@ -1385,9 +1419,7 @@ function extractLessonsWithPages(fullText, pageTexts, totalPages) {
     if (validLessons[i].endPage > totalPages) validLessons[i].endPage = totalPages;
   }
 
-  // 过滤掉没有课文的空单元
   const result = units.filter(u => u.lessons.length > 0);
-
   if (result.length === 0) {
     return [{ title: '教材内容', lessons: [{ title: '教材全文', content: fullText, startPage: 1, endPage: totalPages, type: 'lesson' }] }];
   }
