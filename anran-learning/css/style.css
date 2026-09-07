@@ -1436,6 +1436,15 @@ html, body {
   margin-top: 6px;
 }
 
+.tb-toc-group {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-light);
+  padding: 8px 12px 4px 22px;
+  opacity: 0.8;
+  cursor: default;
+}
+
 .tb-toc-item {
   display: flex;
   align-items: center;
@@ -1446,6 +1455,10 @@ html, body {
   transition: all 0.15s;
   margin-bottom: 2px;
   gap: 8px;
+}
+
+.tb-toc-lesson {
+  padding-left: 34px;
 }
 
 .tb-toc-item:hover {
