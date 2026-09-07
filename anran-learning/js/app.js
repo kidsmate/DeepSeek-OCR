@@ -603,15 +603,40 @@ async function renderPdfPage(textbookId, pageNum, container, lessonTitle, startP
     // 清空容器
     container.innerHTML = '';
 
-    // 页码范围信息
+    // 页码范围
     const sp = startPage || pageNum;
     const ep = endPage || pageNum;
     const rangeText = (ep > sp) ? `（本文章 第 ${sp}-${ep} 页）` : '';
+
+    // 创建工具栏
     const info = document.createElement('div');
     info.className = 'pdf-page-info';
-    info.innerHTML = `<span class="pdf-page-badge">第 ${pageNum} 页 / 共 ${doc.numPages} 页 ${rangeText}</span>
-      <button class="btn-secondary btn-sm" onclick="renderPdfPageNav('${textbookId}', ${pageNum-1}, this, '${lessonTitle.replace(/'/g,"\\'")}', ${sp}, ${ep})" ${pageNum<=sp?'disabled':''}>上一页</button>
-      <button class="btn-secondary btn-sm" onclick="renderPdfPageNav('${textbookId}', ${pageNum+1}, this, '${lessonTitle.replace(/'/g,"\\'")}', ${sp}, ${ep})" ${pageNum>=ep?'disabled':''}>下一页</button>`;
+
+    const badge = document.createElement('span');
+    badge.className = 'pdf-page-badge';
+    badge.textContent = `第 ${pageNum} 页 / 共 ${doc.numPages} 页 ${rangeText}`;
+    info.appendChild(badge);
+
+    // 上一页按钮
+    const prevBtn = document.createElement('button');
+    prevBtn.className = 'btn-secondary btn-sm';
+    prevBtn.textContent = '上一页';
+    prevBtn.disabled = pageNum <= sp;
+    prevBtn.addEventListener('click', () => {
+      renderPdfPage(textbookId, pageNum - 1, container, lessonTitle, sp, ep);
+    });
+    info.appendChild(prevBtn);
+
+    // 下一页按钮
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'btn-secondary btn-sm';
+    nextBtn.textContent = '下一页';
+    nextBtn.disabled = pageNum >= ep;
+    nextBtn.addEventListener('click', () => {
+      renderPdfPage(textbookId, pageNum + 1, container, lessonTitle, sp, ep);
+    });
+    info.appendChild(nextBtn);
+
     container.appendChild(info);
 
     // 渲染 canvas
@@ -626,12 +651,6 @@ async function renderPdfPage(textbookId, pageNum, container, lessonTitle, startP
     console.error('PDF 渲染失败:', err);
     container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p>PDF 渲染失败：${err.message || '未知错误'}</p></div>`;
   }
-}
-
-// PDF 翻页（在文章页码范围内翻页）
-function renderPdfPageNav(textbookId, pageNum, btnEl, lessonTitle, startPage, endPage) {
-  const container = btnEl.closest('.tb-content-body') || btnEl.parentElement.parentElement;
-  renderPdfPage(textbookId, pageNum, container, lessonTitle, startPage, endPage);
 }
 
 // 上一篇/下一篇导航
@@ -1293,8 +1312,8 @@ function extractUnits(text) {
   return units.filter(u => u.lessons.length > 0);
 }
 
-// 专门从 PDF 目录页解析单元和课文（带页码），格式与原书目录完全一致
-// 同时计算"目录页码 → PDF 实际页码"的偏移量（因为 PDF 前面有封面/扉页等页面）
+// 专门从 PDF 目录页解析单元和课文
+// 不使用目录页码，直接在正文中搜索课文标题，找到实际 PDF 物理页码
 function extractUnitsFromToc(pageTexts, totalPages) {
   // 1. 找到目录页（包含"目录"字样的页面）
   const tocPageIndices = [];
@@ -1320,7 +1339,8 @@ function extractUnitsFromToc(pageTexts, totalPages) {
   const units = [];
   let curUnit = null;
   const unitRegex = /^第[一二三四五六七八九十百零\d]+(?:单元|章|节)/;
-  const lessonRegex = /^(\d+)\*?\s+(.+?)\s+(\d{1,4})$/;
+  // 课文条目：课号 标题 [/ 作者] [页码]，页码可能没有
+  const lessonRegex = /^(\d+)\*?\s+(.+?)(?:\s+\d{1,4})?$/;
 
   for (const line of tocLines) {
     if (unitRegex.test(line)) {
@@ -1329,65 +1349,52 @@ function extractUnitsFromToc(pageTexts, totalPages) {
     } else {
       const lm = line.match(lessonRegex);
       if (lm) {
-        const [, num, rest, pageStr] = lm;
-        const tocPage = parseInt(pageStr, 10);
-        if (tocPage >= 1 && tocPage <= totalPages + 20) { // 允许目录页码略超总页数（有偏移）
-          if (!curUnit) { curUnit = { title: '教材内容', lessons: [] }; units.push(curUnit); }
-          const star = line.match(/^\d+\*?/)[0].endsWith('*') ? '*' : '';
-          curUnit.lessons.push({
-            title: num + star + ' ' + rest,
-            content: '',
-            tocPage,        // 目录中标注的页码（教材页码）
-            _coreTitle: rest.replace(/\s*\/.*$/, '').trim(), // 用于搜索正文的核心标题
-          });
-        }
+        const [, num, rest] = lm;
+        // 去掉作者信息（/ 作者），保留纯标题用于搜索
+        const coreTitle = rest.replace(/\s*\/.*$/, '').trim();
+        if (coreTitle.length < 2) continue;
+        if (!curUnit) { curUnit = { title: '教材内容', lessons: [] }; units.push(curUnit); }
+        const star = line.match(/^\d+\*?/)[0].endsWith('*') ? '*' : '';
+        curUnit.lessons.push({
+          title: num + star + ' ' + rest,  // 显示用完整标题
+          content: '',
+          _coreTitle: coreTitle,            // 搜索用核心标题
+        });
       }
     }
   }
 
   if (units.length === 0) return null;
 
-  // 4. 计算页码偏移量：用第一篇课文在 PDF 中实际出现的页面 减去 目录标注页码
+  // 4. 逐篇搜索正文，找到每篇课文的实际 PDF 物理页码
   const allLessons = [];
   units.forEach(u => u.lessons.forEach(l => allLessons.push(l)));
 
-  let offset = 0;
   for (const l of allLessons) {
     const core = norm(l._coreTitle);
-    if (!core) continue;
-    // 在非目录页中搜索课文标题
     let actualPage = -1;
-    for (let p = 0; p < pageTexts.length; p++) {
-      if (tocSet.has(p)) continue;
-      if (norm(pageTexts[p]).includes(core)) {
-        actualPage = p + 1;
-        break;
+    if (core) {
+      for (let p = 0; p < pageTexts.length; p++) {
+        if (tocSet.has(p)) continue; // 跳过目录页
+        if (norm(pageTexts[p]).includes(core)) {
+          actualPage = p + 1; // 1-based 页码
+          break;
+        }
       }
     }
-    if (actualPage > 0) {
-      offset = actualPage - l.tocPage;
-      console.log('[目录校准] 课文:', l.title, '目录页码:', l.tocPage, '实际PDF页:', actualPage, '偏移量:', offset);
-      break; // 用第一篇能找到的课文校准
-    }
-  }
-
-  // 5. 应用偏移量，得到 PDF 实际页码
-  for (const l of allLessons) {
-    l.startPage = l.tocPage + offset;
-    if (l.startPage < 1) l.startPage = 1;
-    if (l.startPage > totalPages) l.startPage = totalPages;
+    l.startPage = actualPage > 0 ? actualPage : 1;
     delete l._coreTitle;
-    delete l.tocPage;
+    console.log('[页码定位]', l.title, '→ PDF 第', l.startPage, '页');
   }
 
-  // 6. 计算每篇课文的结束页码
+  // 5. 计算每篇课文的结束页码 = 下一篇起始页 - 1
   for (let i = 0; i < allLessons.length; i++) {
     const next = i + 1 < allLessons.length ? allLessons[i + 1].startPage : totalPages + 1;
     allLessons[i].endPage = Math.max(allLessons[i].startPage, next - 1);
     if (allLessons[i].endPage > totalPages) allLessons[i].endPage = totalPages;
   }
 
-  console.log('[目录解析] 偏移量:', offset, '单元数:', units.length, '课文数:', allLessons.length);
+  console.log('[目录解析] 单元数:', units.length, '课文数:', allLessons.length);
   return units.filter(u => u.lessons.length > 0);
 }
 
