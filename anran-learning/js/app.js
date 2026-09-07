@@ -445,7 +445,7 @@ function renderBookReader(units, ti, point) {
   let matchedU = -1, matchedL = -1;
   units.forEach((u, ui) => {
     u.lessons.forEach((l, li) => {
-      if (matchedU < 0 && point && (l.title.includes(point.title) || point.title.includes(l.title.substring(0, 2)) || findRelevantSection({sections:[{title:l.title,content:l.content}]}, point) === 0)) {
+      if (matchedU < 0 && point && l.title && (l.title.includes(point.title) || point.title.includes(l.title.substring(0, 2)) || findRelevantSection({sections:[{title:l.title,content:l.content}]}, point) === 0)) {
         matchedU = ui; matchedL = li;
       }
     });
@@ -789,8 +789,8 @@ function findRelevantSection(textbook, point) {
   let bestIdx = -1;
   let bestScore = 0;
   textbook.sections.forEach((sec, i) => {
-    const titleText = sec.title;
-    const bodyText = sec.content.substring(0, 500);
+    const titleText = sec.title || '';
+    const bodyText = (sec.content || '').substring(0, 500);
     let score = 0;
     kwSet.forEach(k => {
       if (titleText.includes(k)) score += (k.length >= 2 ? 3 : 1);  // 标题匹配
