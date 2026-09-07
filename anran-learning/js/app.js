@@ -587,7 +587,7 @@ function selectBookLesson(ti, fIdx) {
   if (contentEl) contentEl.scrollTop = 0;
 }
 
-// 用 PDF.js 渲染指定页码到容器（支持文章页码范围）
+// 用 PDF.js 渲染指定页码到容器
 async function renderPdfPage(textbookId, pageNum, container, lessonTitle, startPage, endPage) {
   try {
     const doc = await getPdfDoc(textbookId);
@@ -603,7 +603,7 @@ async function renderPdfPage(textbookId, pageNum, container, lessonTitle, startP
     // 清空容器
     container.innerHTML = '';
 
-    // 页码范围
+    // 文章页码范围（仅用于显示，不限制翻页）
     const sp = startPage || pageNum;
     const ep = endPage || pageNum;
     const rangeText = (ep > sp) ? `（本文章 第 ${sp}-${ep} 页）` : '';
@@ -617,11 +617,11 @@ async function renderPdfPage(textbookId, pageNum, container, lessonTitle, startP
     badge.textContent = `第 ${pageNum} 页 / 共 ${doc.numPages} 页 ${rangeText}`;
     info.appendChild(badge);
 
-    // 上一页按钮
+    // 上一页按钮（允许在整个 PDF 范围内翻页）
     const prevBtn = document.createElement('button');
     prevBtn.className = 'btn-secondary btn-sm';
     prevBtn.textContent = '上一页';
-    prevBtn.disabled = pageNum <= sp;
+    prevBtn.disabled = pageNum <= 1;
     prevBtn.addEventListener('click', () => {
       renderPdfPage(textbookId, pageNum - 1, container, lessonTitle, sp, ep);
     });
@@ -631,7 +631,7 @@ async function renderPdfPage(textbookId, pageNum, container, lessonTitle, startP
     const nextBtn = document.createElement('button');
     nextBtn.className = 'btn-secondary btn-sm';
     nextBtn.textContent = '下一页';
-    nextBtn.disabled = pageNum >= ep;
+    nextBtn.disabled = pageNum >= doc.numPages;
     nextBtn.addEventListener('click', () => {
       renderPdfPage(textbookId, pageNum + 1, container, lessonTitle, sp, ep);
     });
