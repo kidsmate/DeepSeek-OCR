@@ -1720,6 +1720,23 @@ async function extractUnitsFromOutline(pdf, outline, totalPages) {
   const groupKeywords = ['阅读', '写作', '任务', '综合性学习', '课外古诗词', '名著导读', '口语交际', '活动·探究', '诵读'];
   // 跳过非内容的顶级标题
   const skipTopTitles = ['封面', '目录', '附录', '前言', '后记', '版权页', '扉页', '编者', '编写'];
+  // 单元匹配模式
+  const unitPattern = /第[一二三四五六七八九十百零〇两0-9]+(?:单元|章|节|部分|编)/;
+
+  // 递归查找所有匹配单元模式的节点
+  function findUnitNodes(nodes, depth = 0) {
+    const found = [];
+    for (const node of nodes) {
+      const title = (node.title || '').trim();
+      if (unitPattern.test(title)) {
+        found.push(node);
+      } else if (node.items && node.items.length > 0 && depth < 5) {
+        // 只在未匹配到单元的分支继续递归（避免把单元内部的子节点误判为单元）
+        found.push(...findUnitNodes(node.items, depth + 1));
+      }
+    }
+    return found;
+  }
 
   // 判断节点是否是栏目：匹配栏目关键词，或有子节点
   const isGroupNode = (node) => {
@@ -1728,38 +1745,51 @@ async function extractUnitsFromOutline(pdf, outline, totalPages) {
     return hasKeyword || (node.items && node.items.length > 0);
   };
 
-  // 遍历顶级节点
-  for (const topNode of outline) {
-    const topTitle = (topNode.title || '').trim();
-    // 跳过明显非单元的顶级节点（封面、目录等）
-    const shouldSkip = skipTopTitles.some(s => topTitle.includes(s)) && !/第[一二三四五六七八九十百零\d]+(?:单元|章|节)/.test(topTitle);
-    if (shouldSkip) continue;
-
-    const unit = { title: topTitle, lessons: [] };
-
-    // 遍历二级节点
-    const children = topNode.items || [];
+  // 从单元节点提取课文（递归处理子节点）
+  async function extractLessonsFromUnit(unitNode) {
+    const lessons = [];
+    const children = unitNode.items || [];
     for (const child of children) {
       const childTitle = (child.title || '').trim();
       if (isGroupNode(child)) {
-        // 二级是栏目
-        unit.lessons.push({ title: childTitle, type: 'group' });
-        console.log('[书签] 栏目:', childTitle);
-        // 遍历三级节点（文章）
-        const grandChildren = child.items || [];
-        for (const gc of grandChildren) {
-          const pageNum = await getPageFromDest(gc.dest);
-          unit.lessons.push({ title: (gc.title || '').trim(), type: 'lesson', startPage: pageNum });
-          console.log('[书签] 文章:', gc.title, '→ 第', pageNum, '页');
-        }
+        // 栏目节点
+        lessons.push({ title: childTitle, type: 'group' });
+        console.log('[书签]   栏目:', childTitle);
+        // 递归提取栏目下的课文
+        const subLessons = await extractLessonsFromUnit(child);
+        lessons.push(...subLessons);
       } else {
-        // 二级是叶子节点 → 文章（没有栏目层）
+        // 叶子节点 → 文章
         const pageNum = await getPageFromDest(child.dest);
-        unit.lessons.push({ title: childTitle, type: 'lesson', startPage: pageNum });
-        console.log('[书签] 文章:', childTitle, '→ 第', pageNum, '页');
+        lessons.push({ title: childTitle, type: 'lesson', startPage: pageNum });
+        console.log('[书签]   文章:', childTitle, '→ 第', pageNum, '页');
       }
     }
+    return lessons;
+  }
 
+  // === 优先策略：递归查找所有"第X单元/章"节点 ===
+  const unitNodes = findUnitNodes(outline);
+  let sourceNodes = [];
+
+  if (unitNodes.length > 0) {
+    console.log('[书签] 递归找到', unitNodes.length, '个单元节点');
+    sourceNodes = unitNodes;
+  } else {
+    // 回退：使用顶级节点（跳过封面/目录等）
+    console.log('[书签] 未找到单元模式节点，使用顶级节点');
+    for (const topNode of outline) {
+      const topTitle = (topNode.title || '').trim();
+      const shouldSkip = skipTopTitles.some(s => topTitle.includes(s)) && !unitPattern.test(topTitle);
+      if (!shouldSkip) sourceNodes.push(topNode);
+    }
+  }
+
+  // 遍历源节点，提取单元
+  for (const node of sourceNodes) {
+    const title = (node.title || '').trim();
+    const unit = { title, lessons: [] };
+    unit.lessons = await extractLessonsFromUnit(node);
     if (unit.lessons.length > 0) units.push(unit);
   }
 
