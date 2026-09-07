@@ -1624,6 +1624,42 @@ html, body {
   font-weight: 600;
 }
 
+/* 页码偏移调整栏 */
+.tb-offset-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 12px;
+  background: rgba(108, 92, 231, 0.08);
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+.tb-offset-label {
+  font-size: 13px;
+  color: var(--text-light);
+  font-weight: 500;
+}
+.tb-offset-btn {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tb-offset-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--primary);
+  min-width: 28px;
+  text-align: center;
+}
+.tb-offset-reset {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
 .tb-content-body {
   flex: 1;
   overflow-y: auto;

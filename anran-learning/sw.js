@@ -1,13 +1,13 @@
 // 安冉的学习助手 - Service Worker (PWA 离线支持)
-const CACHE_NAME = 'anran-learning-v7';
+const CACHE_NAME = 'anran-learning-v8';
 const ASSETS = [
   './',
   './index.html',
-  './css/style.css?v=20260926',
-  './js/data.js?v=20260926',
-  './js/learning.js?v=20260926',
-  './js/storage.js?v=20260926',
-  './js/app.js?v=20260926',
+  './css/style.css?v=20260927',
+  './js/data.js?v=20260927',
+  './js/learning.js?v=20260927',
+  './js/storage.js?v=20260927',
+  './js/app.js?v=20260927',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

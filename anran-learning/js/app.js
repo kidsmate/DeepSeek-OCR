@@ -512,7 +512,19 @@ function renderBookReader(units, ti, point) {
     html += `<button class="btn-secondary btn-sm" onclick="navBookLesson('${ti}', -1)" ${flatIdx === 0 ? 'disabled' : ''}>← 上一篇</button>`;
     html += `<span class="tb-content-page">${flatIdx+1} / ${allLessons.length}</span>`;
     html += `<button class="btn-secondary btn-sm" onclick="navBookLesson('${ti}', 1)" ${flatIdx === allLessons.length-1 ? 'disabled' : ''}>下一篇 →</button>`;
-    html += `</div></div>`;
+    html += `</div>`;
+    // 页码偏移调整控件（仅当有 PDF 时显示）
+    if (textbook && textbook.hasPdf) {
+      const offset = textbook.pageOffset || 0;
+      html += `<div class="tb-offset-bar">`;
+      html += `<span class="tb-offset-label">📐 页码偏移</span>`;
+      html += `<button class="btn-secondary btn-sm tb-offset-btn" onclick="adjustPageOffset('${ti}', -1)">−</button>`;
+      html += `<span class="tb-offset-value" id="tb-offset-value-${ti}">${offset}</span>`;
+      html += `<button class="btn-secondary btn-sm tb-offset-btn" onclick="adjustPageOffset('${ti}', 1)">+</button>`;
+      html += `<button class="btn-secondary btn-sm tb-offset-reset" onclick="adjustPageOffset('${ti}', 'auto')">自动</button>`;
+      html += `</div>`;
+    }
+    html += `</div>`;
     html += `<div class="tb-content-body" id="tb-content-body-${ti}">`;
     html += formatTextbookContent(cur.content);
     html += `</div>`;
@@ -544,8 +556,9 @@ function renderBookReader(units, ti, point) {
     const l = allLessons[flatIdx];
     console.log('[教材阅读器] 初始渲染 PDF，课文=', l.title, 'startPage=', l.startPage, 'endPage=', l.endPage);
     if (l.startPage) {
-      const sp = l.startPage;
-      const ep = l.endPage || l.startPage;
+      const offset = (textbook.pageOffset) || 0;
+      const sp = l.startPage + offset;
+      const ep = (l.endPage || l.startPage) + offset;
       setTimeout(() => {
         const bodyEl = document.getElementById(`tb-content-body-${ti}`);
         if (bodyEl) {
@@ -595,8 +608,9 @@ function selectBookLesson(ti, fIdx) {
   const hasPdf = window._tbHasPdf && window._tbHasPdf[ti];
 
   if (hasPdf && textbookId && l.startPage) {
-    const sp = l.startPage;
-    const ep = l.endPage || l.startPage;
+    const offset = getPageOffset(textbookId);
+    const sp = l.startPage + offset;
+    const ep = (l.endPage || l.startPage) + offset;
     bodyEl.innerHTML = `<div class="pdf-loading">📄 正在加载 PDF 第 ${sp} 页${ep > sp ? `（本文章 第 ${sp}-${ep} 页）` : ''}...</div>`;
     renderPdfPage(textbookId, sp, bodyEl, l.title, sp, ep);
   } else {
@@ -606,6 +620,79 @@ function selectBookLesson(ti, fIdx) {
   // 滚动正文到顶部
   const contentEl = document.getElementById(`tb-content-${ti}`);
   if (contentEl) contentEl.scrollTop = 0;
+}
+
+// 获取教材的页码偏移量
+function getPageOffset(textbookId) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  return (t && t.pageOffset) || 0;
+}
+
+// 设置教材的页码偏移量并保存
+function setPageOffset(textbookId, offset) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (t) {
+    t.pageOffset = offset;
+    saveData(state);
+  }
+}
+
+// 调整页码偏移：delta 为数字时加减，'auto' 时自动检测
+async function adjustPageOffset(ti, delta) {
+  const textbookId = window._tbTextbookId && window._tbTextbookId[ti];
+  if (!textbookId) return;
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t) return;
+
+  if (delta === 'auto') {
+    showToast('正在自动检测偏移...');
+    try {
+      const doc = await getPdfDoc(textbookId);
+      if (!doc) { showToast('PDF 未加载'); return; }
+      // 提取所有页文本用于检测
+      const pageTexts = [];
+      for (let i = 1; i <= Math.min(doc.numPages, 50); i++) {
+        const page = await doc.getPage(i);
+        const tc = await page.getTextContent();
+        const lines = [];
+        const yMap = {};
+        for (const item of tc.items) {
+          const y = Math.round(item.transform[5]);
+          let lk = y;
+          for (const k of Object.keys(yMap)) {
+            if (Math.abs(parseInt(k) - y) <= 3) { lk = parseInt(k); break; }
+          }
+          if (!yMap[lk]) yMap[lk] = [];
+          yMap[lk].push({ x: item.transform[4], str: item.str });
+        }
+        const ys = Object.keys(yMap).map(Number).sort((a, b) => b - a);
+        for (const y of ys) {
+          const line = yMap[y].sort((a, b) => a.x - b.x).map(it => it.str).join('').trim();
+          if (line) lines.push(line);
+        }
+        pageTexts.push(lines.join('\n'));
+      }
+      const offset = detectPageOffset(pageTexts, t.units);
+      t.pageOffset = offset;
+      saveData(state);
+      showToast(`自动检测偏移：${offset}`);
+    } catch (e) {
+      showToast('自动检测失败');
+    }
+  } else {
+    t.pageOffset = (t.pageOffset || 0) + delta;
+    saveData(state);
+  }
+
+  // 更新显示
+  const valEl = document.getElementById(`tb-offset-value-${ti}`);
+  if (valEl) valEl.textContent = t.pageOffset;
+
+  // 重新渲染当前课文
+  const sel = window._tbSelection && window._tbSelection[ti];
+  if (sel) {
+    selectBookLesson(ti, sel.flatIdx);
+  }
 }
 
 // 用 PDF.js 渲染指定页码到容器
@@ -1288,7 +1375,12 @@ async function tocAutoExtract(textbookId) {
     } catch (e) {}
     const hasLessons = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
     if (!hasLessons) {
-      units = autoExtractToc(pageTexts, pdf.numPages, fullText);
+      const extracted = autoExtractToc(pageTexts, pdf.numPages, fullText);
+      units = extracted && extracted.units;
+      t.pageOffset = (extracted && extracted.pageOffset) || 0;
+    } else {
+      // 书签提取成功，也检测偏移
+      t.pageOffset = detectPageOffset(pageTexts, units) || 0;
     }
     t.units = units;
     saveData(state);
@@ -1388,11 +1480,17 @@ function handlePdfUpload(file) {
       const hasLessons = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
       if (!hasLessons) {
         console.log('[目录解析] 书签无课文或无书签，使用自动扫描');
-        units = autoExtractToc(pageTexts, pdf.numPages, fullText);
+        const extracted = autoExtractToc(pageTexts, pdf.numPages, fullText);
+        units = extracted && extracted.units;
+        currentPdfData.pageOffset = (extracted && extracted.pageOffset) || 0;
+      } else {
+        // 书签提取成功，也检测页码偏移
+        currentPdfData.pageOffset = detectPageOffset(pageTexts, units) || 0;
       }
       // 最终兜底
       if (!units || units.length === 0 || !units.some(u => u.lessons.some(l => l.type === 'lesson'))) {
         units = [{ title: '教材内容', lessons: [{ title: '教材全文', content: fullText, startPage: 1, endPage: pdf.numPages, type: 'lesson' }] }];
+        currentPdfData.pageOffset = 0;
       }
 
       // 如果 PDF 原本没有书签，但我们提取到了结构，把结构写回 PDF 书签
@@ -1880,15 +1978,60 @@ function autoExtractToc(pageTexts, totalPages, fullText) {
 
   const result = units.filter(u => u.lessons.some(l => l.type === 'lesson'));
   console.log('[自动提取] ✅ 完成:', result.length, '个单元,', allLessons.length, '篇课文');
-  return result;
+
+  // === 第六步：自动检测页码偏移 ===
+  // PDF 第1页通常是封面，正文页 = 检测页 + offset
+  const offset = detectPageOffset(pageTexts, result);
+  if (offset !== 0) {
+    console.log('[自动提取] 📐 检测到页码偏移:', offset);
+  }
+  return { units: result, pageOffset: offset };
 }
 
-// 兼容旧调用名
+// 自动检测页码偏移：PDF 有封面/目录等前置页，正文起始页比检测页晚
+// 策略：取第一篇课文，找到它在正文中实际出现的页面，与检测页的差就是偏移
+function detectPageOffset(pageTexts, units) {
+  const norm = s => s.replace(/[，。、；：！？""''（）《》\s,.;:!?'"'()<>*·\d]/g, '');
+  // 找第一篇课文
+  let firstLesson = null;
+  for (const u of units) {
+    for (const l of u.lessons) {
+      if (l.type === 'lesson') { firstLesson = l; break; }
+    }
+    if (firstLesson) break;
+  }
+  if (!firstLesson || !firstLesson.startPage) return 0;
+
+  const coreTitle = norm(firstLesson.title.replace(/^\d+\*?\s*/, ''));
+  if (!coreTitle || coreTitle.length < 2) return 0;
+
+  const detectedPage = firstLesson.startPage;
+  // 从检测页往后找，找标题出现在页面顶部且该页有较多正文（>15行）的页面
+  for (let p = detectedPage; p <= pageTexts.length; p++) {
+    const pageText = pageTexts[p - 1];
+    const lines = pageText.split('\n').map(s => s.trim()).filter(s => s);
+    // 标题是否出现在前 5 行
+    const titleInHeader = lines.slice(0, 5).some(l => norm(l).includes(coreTitle));
+    if (titleInHeader && lines.length > 10) {
+      const offset = p - detectedPage;
+      if (offset > 0) {
+        console.log('[偏移检测] 课文:', firstLesson.title, '检测页:', detectedPage, '正文页:', p, '偏移:', offset);
+        return offset;
+      }
+      break;
+    }
+  }
+  return 0;
+}
+
+// 兼容旧调用名（返回 units 数组）
 function extractLessonsWithPages(fullText, pageTexts, totalPages) {
-  return autoExtractToc(pageTexts, totalPages, fullText) || [];
+  const r = autoExtractToc(pageTexts, totalPages, fullText);
+  return (r && r.units) || [];
 }
 function extractUnitsFromContent(pageTexts, totalPages) {
-  return autoExtractToc(pageTexts, totalPages, '') || [];
+  const r = autoExtractToc(pageTexts, totalPages, '');
+  return (r && r.units) || [];
 }
 
 // 把提取到的目录结构写入 PDF 书签（outline）
@@ -2106,6 +2249,7 @@ function saveTextbook() {
     chapters: currentPdfData.chapters || [],
     sections: currentPdfData.sections || [],
     units: currentPdfData.units || [],
+    pageOffset: currentPdfData.pageOffset || 0,
     hasPdf: !!currentPdfData.arrayBuffer,
   };
   // 如果没有提取到章节，则把全文作为一个章节保存
