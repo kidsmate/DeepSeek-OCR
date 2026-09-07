@@ -1201,7 +1201,7 @@ function tocToggleLessonType(textbookId, ui, li) {
 }
 
 // 保存并返回阅读页
-function tocSave(textbookId) {
+async function tocSave(textbookId) {
   // 重新计算 endPage
   const t = state.textbooks.find(x => x.id === textbookId);
   if (t) {
@@ -1212,6 +1212,23 @@ function tocSave(textbookId) {
       allLessons[i].endPage = Math.max(allLessons[i].startPage || 1, next - 1);
     }
     saveData(state);
+
+    // 把用户手动编辑的目录也写回 PDF 书签
+    if (t.hasPdf && t.units.some(u => u.lessons.some(l => l.type === 'lesson'))) {
+      try {
+        const arrayBuffer = await loadPdfFromDB(textbookId);
+        if (arrayBuffer) {
+          const modified = await addBookmarksToPdf(arrayBuffer, t.units);
+          await savePdfToDB(textbookId, modified, t.name);
+          if (_pdfDocCache[textbookId]) {
+            try { _pdfDocCache[textbookId].destroy(); } catch(e) {}
+            delete _pdfDocCache[textbookId];
+          }
+        }
+      } catch (e) {
+        console.warn('[目录保存] 写回书签失败:', e);
+      }
+    }
   }
   showToast('目录已保存');
   viewTextbook(textbookId);
@@ -1261,9 +1278,11 @@ async function tocAutoExtract(textbookId) {
     }
     // 提取目录
     let units;
+    let hadOutline = false;
     try {
       const outline = await pdf.getOutline();
       if (outline && outline.length > 0) {
+        hadOutline = true;
         units = await extractUnitsFromOutline(pdf, outline, pdf.numPages);
       }
     } catch (e) {}
@@ -1271,8 +1290,24 @@ async function tocAutoExtract(textbookId) {
     if (!hasLessons) {
       units = extractLessonsWithPages(fullText, pageTexts, pdf.numPages);
     }
+    const hasLessons2 = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
+    if (!hasLessons2) {
+      units = extractUnitsFromContent(pageTexts, pdf.numPages);
+    }
     t.units = units;
     saveData(state);
+
+    // 写回书签
+    if (!hadOutline && units && units.some(u => u.lessons.some(l => l.type === 'lesson'))) {
+      const modified = await addBookmarksToPdf(arrayBuffer, units);
+      await savePdfToDB(textbookId, modified, t.name);
+      // 清除 PDF.js 缓存
+      if (_pdfDocCache[textbookId]) {
+        try { _pdfDocCache[textbookId].destroy(); } catch(e) {}
+        delete _pdfDocCache[textbookId];
+      }
+    }
+
     showToast(`重新提取完成：${units.length} 个单元`);
     renderTocEditor(textbookId);
   } catch (err) {
@@ -1340,23 +1375,44 @@ function handlePdfUpload(file) {
         document.getElementById('pdfProgressFill').style.width = (40 + (i / pdf.numPages) * 50) + '%';
       }
 
-      // 统一提取方案：优先使用 PDF 内置书签（outline），回退到文本提取
+      // 统一提取方案：优先 PDF 书签 → 目录页文本 → 全文扫描
       let units;
+      let hadOutline = false;
       try {
         const outline = await pdf.getOutline();
         console.log('[目录解析] PDF 书签:', outline ? outline.length + ' 个顶级节点' : '无');
         if (outline && outline.length > 0) {
+          hadOutline = true;
           units = await extractUnitsFromOutline(pdf, outline, pdf.numPages);
         }
       } catch (e) {
         console.warn('[目录解析] 获取书签失败:', e);
       }
-      // 回退条件：没有单元，或所有单元都没有可点击课文
+      // 回退条件：没有可点击课文
       const hasLessons = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
       if (!hasLessons) {
-        console.log('[目录解析] 书签未提取到课文，回退到文本提取');
+        console.log('[目录解析] 书签无课文，尝试目录页文本提取');
         units = extractLessonsWithPages(fullText, pageTexts, pdf.numPages);
       }
+      // 再次检查，如果目录页提取也不行，用全文扫描
+      const hasLessons2 = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
+      if (!hasLessons2) {
+        console.log('[目录解析] 目录页提取失败，尝试全文扫描');
+        units = extractUnitsFromContent(pageTexts, pdf.numPages);
+      }
+      // 最终兜底
+      if (!units || units.length === 0 || !units.some(u => u.lessons.some(l => l.type === 'lesson'))) {
+        units = [{ title: '教材内容', lessons: [{ title: '教材全文', content: fullText, startPage: 1, endPage: totalPages, type: 'lesson' }] }];
+      }
+
+      // 如果 PDF 原本没有书签，但我们提取到了结构，把结构写回 PDF 书签
+      let modifiedBuffer = arrayBuffer;
+      if (!hadOutline && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'))) {
+        document.getElementById('pdfStatus').textContent = '正在写入 PDF 书签...';
+        modifiedBuffer = await addBookmarksToPdf(arrayBuffer, units);
+        currentPdfData.arrayBuffer = modifiedBuffer;
+      }
+
       const chapters = extractChapters(fullText);
       const sections = extractSections(fullText);
 
@@ -1847,6 +1903,195 @@ function extractLessonsWithPages(fullText, pageTexts, totalPages) {
 
   console.log('[目录解析] 最终单元数:', result.length, '文章数:', validLessons.length);
   return result;
+}
+
+// 全文扫描提取：不依赖目录页，直接从所有页面的页眉位置识别单元/栏目/课文
+// 优势：目录页格式千奇百怪，但正文页的标题位置通常很规范
+function extractUnitsFromContent(pageTexts, totalPages) {
+  const units = [];
+  let curUnit = null;
+  const unitRegex = /^第[一二三四五六七八九十百零\d]+(?:单元|章|节)/;
+  const groupKeywords = ['阅读', '写作', '任务', '综合性学习', '课外古诗词', '名著导读', '口语交际', '活动·探究', '诵读'];
+  const lessonRegex = /^(\d+)\*?\s+(.+)$/;
+
+  for (let p = 0; p < pageTexts.length; p++) {
+    const lines = pageTexts[p].split('\n');
+    // 只看每页前 6 行（标题通常在页面顶部）
+    const headerLines = lines.slice(0, 6);
+
+    for (const line of headerLines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.length > 40) continue;
+
+      // 单元标题
+      if (unitRegex.test(trimmed)) {
+        curUnit = { title: trimmed, lessons: [] };
+        units.push(curUnit);
+        console.log('[全文扫描] 单元:', trimmed, '→ 第', p + 1, '页');
+        continue;
+      }
+
+      if (!curUnit) continue;
+
+      // 栏目
+      const isGroup = groupKeywords.some(kw => trimmed === kw || trimmed.startsWith(kw + '：') || trimmed.startsWith(kw + ':'));
+      if (isGroup) {
+        let groupName = trimmed;
+        const colonIdx = trimmed.search(/[：:]/);
+        if (colonIdx > 0) groupName = trimmed.substring(0, colonIdx).trim();
+        curUnit.lessons.push({ title: groupName, type: 'group' });
+        console.log('[全文扫描] 栏目:', groupName);
+        continue;
+      }
+
+      // 课文（数字开头）
+      const lm = trimmed.match(lessonRegex);
+      if (lm) {
+        const [, num, rest] = lm;
+        let title = rest.replace(/[.．·•…]+/g, ' ').replace(/\s+/g, ' ').trim();
+        const slashIdx = title.indexOf('/');
+        if (slashIdx > 0) title = title.substring(0, slashIdx).trim();
+        if (title.length >= 2 && title.length <= 30) {
+          const star = trimmed.match(/^\d+\*?/)[0].endsWith('*') ? '*' : '';
+          curUnit.lessons.push({
+            title: num + star + ' ' + title,
+            type: 'lesson',
+            startPage: p + 1,
+          });
+          console.log('[全文扫描] 课文:', num + star + ' ' + title, '→ 第', p + 1, '页');
+        }
+      }
+    }
+  }
+
+  // 清理空栏目
+  for (const u of units) {
+    const cleaned = [];
+    for (let i = 0; i < u.lessons.length; i++) {
+      const l = u.lessons[i];
+      if (l.type === 'group') {
+        let hasLessonAfter = false;
+        for (let j = i + 1; j < u.lessons.length; j++) {
+          if (u.lessons[j].type === 'group') break;
+          if (u.lessons[j].type === 'lesson') { hasLessonAfter = true; break; }
+        }
+        if (hasLessonAfter) cleaned.push(l);
+      } else {
+        cleaned.push(l);
+      }
+    }
+    u.lessons = cleaned;
+  }
+
+  // 计算 endPage
+  const allLessons = [];
+  units.forEach(u => u.lessons.forEach(l => { if (l.type === 'lesson') allLessons.push(l); }));
+  for (let i = 0; i < allLessons.length; i++) {
+    const next = i + 1 < allLessons.length ? allLessons[i + 1].startPage : totalPages + 1;
+    allLessons[i].endPage = Math.max(allLessons[i].startPage, next - 1);
+    if (allLessons[i].endPage > totalPages) allLessons[i].endPage = totalPages;
+  }
+
+  const result = units.filter(u => u.lessons.some(l => l.type === 'lesson'));
+  console.log('[全文扫描] 最终单元数:', result.length, '文章数:', allLessons.length);
+  return result;
+}
+
+// 把提取到的目录结构写入 PDF 书签（outline）
+// 这样下次打开 PDF 时，pdf.js 的 getOutline() 就能直接拿到正确的三级结构
+async function addBookmarksToPdf(arrayBuffer, units) {
+  try {
+    if (typeof PDFLib === 'undefined') {
+      console.warn('[书签写入] pdf-lib 未加载，跳过');
+      return arrayBuffer;
+    }
+    const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
+
+    // 构建 pdf-lib 的 outline 结构
+    const buildOutline = (lessons) => {
+      const items = [];
+      let i = 0;
+      while (i < lessons.length) {
+        const l = lessons[i];
+        if (l.type === 'group') {
+          // 收集这个栏目下的所有课文
+          const children = [];
+          i++;
+          while (i < lessons.length && lessons[i].type === 'lesson') {
+            const lesson = lessons[i];
+            children.push({
+              title: lesson.title,
+              pageIndex: Math.max(0, (lesson.startPage || 1) - 1),
+              children: [],
+            });
+            i++;
+          }
+          const groupPage = children.length > 0 ? children[0].pageIndex : 0;
+          items.push({
+            title: l.title,
+            pageIndex: groupPage,
+            children,
+          });
+        } else {
+          items.push({
+            title: l.title,
+            pageIndex: Math.max(0, (l.startPage || 1) - 1),
+            children: [],
+          });
+          i++;
+        }
+      }
+      return items;
+    };
+
+    const outline = units.map(u => {
+      const children = buildOutline(u.lessons);
+      const firstPage = children.length > 0 ? children[0].pageIndex : 0;
+      return {
+        title: u.title,
+        pageIndex: firstPage,
+        children,
+      };
+    });
+
+    // pdf-lib 的 setOutline（部分版本支持）
+    if (typeof pdfDoc.setOutline === 'function') {
+      pdfDoc.setOutline(outline);
+    } else {
+      // 低版本兼容：手动操作 catalog 的 Outlines
+      console.warn('[书签写入] pdf-lib 无 setOutline，尝试手动写入');
+      const outlines = [];
+      const createOutlineItem = (item, parent) => {
+        const dict = pdfDoc.context.obj({
+          Title: item.title,
+          Parent: parent,
+        });
+        if (item.children && item.children.length > 0) {
+          const kids = item.children.map(c => createOutlineItem(c, dict));
+          dict.set(PDFLib.PDFName.of('First'), kids[0]);
+          dict.set(PDFLib.PDFName.of('Last'), kids[kids.length - 1]);
+          dict.set(PDFLib.PDFName.of('Count'), kids.length);
+          dict.set(PDFLib.PDFName.of('Kids'), pdfDoc.context.obj(kids));
+        }
+        // 设置目标页
+        if (item.pageIndex >= 0) {
+          const page = pdfDoc.getPage(item.pageIndex);
+          dict.set(PDFLib.PDFName.of('Dest'), pdfDoc.context.obj([page.ref, PDFLib.PDFName.of('XYZ')]));
+        }
+        return dict;
+      };
+      // 简化处理：如果 setOutline 不存在，就放弃（不破坏原文件）
+      console.warn('[书签写入] 手动写入未实现，保留原 PDF');
+      return arrayBuffer;
+    }
+
+    const modifiedBytes = await pdfDoc.save();
+    console.log('[书签写入] 成功写入', outline.length, '个单元书签');
+    return modifiedBytes;
+  } catch (err) {
+    console.error('[书签写入] 失败:', err);
+    return arrayBuffer; // 失败则返回原文件
+  }
 }
 
 // 专门从 PDF 目录页解析单元和课文
