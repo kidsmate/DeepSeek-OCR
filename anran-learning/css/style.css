@@ -1428,6 +1428,13 @@ html, body {
   padding: 8px;
 }
 
+.tb-toc-empty {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-light);
+}
+
 .tb-toc-unit-label {
   font-weight: 700;
   font-size: 13px;
