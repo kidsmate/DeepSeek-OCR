@@ -1215,6 +1215,14 @@ function renderTocEditor(textbookId) {
     <button class="btn-secondary" style="flex:1;" onclick="tocAutoExtract('${textbookId}')">🔄 重新自动提取</button>
   </div>`;
 
+  // 手动书签批量导入
+  html += `<div style="margin-top:20px;border-top:1px dashed #ddd;padding-top:16px;">
+    <h4 style="margin:0 0 8px;font-size:15px;">📝 批量导入书签</h4>
+    <p style="font-size:12px;color:#888;margin-bottom:10px;">每行一条，格式：<code style="background:#f5f5f5;padding:2px 6px;border-radius:4px;">层级,标题,页码</code>（层级1=单元,2=栏目,3=课文）</p>
+    <textarea id="tocBatchInput" rows="8" style="width:100%;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;font-family:monospace;" placeholder="1,第一单元,1&#10;2,阅读,2&#10;3,1 春,3&#10;3,2 济南的冬天,5&#10;2,写作,8&#10;1,第二单元,10"></textarea>
+    <button class="btn-primary" style="width:100%;margin-top:10px;" onclick="tocBatchImport('${textbookId}')">📋 导入书签</button>
+  </div>`;
+
   document.getElementById('kpTitle').textContent = '编辑目录';
   document.getElementById('kpBody').innerHTML = html;
 }
@@ -1226,6 +1234,56 @@ function tocAddUnit(textbookId) {
   ensureUnits(t);
   t.units.push({ title: '新单元', lessons: [] });
   saveData(state);
+  renderTocEditor(textbookId);
+}
+
+// 批量导入书签（类似 Python 的 add_bookmarks_manual）
+function tocBatchImport(textbookId) {
+  const t = state.textbooks.find(x => x.id === textbookId);
+  if (!t) return;
+  const input = document.getElementById('tocBatchInput');
+  if (!input || !input.value.trim()) {
+    showToast('请输入书签内容');
+    return;
+  }
+  const lines = input.value.trim().split('\n');
+  const units = [];
+  let curUnit = null;
+
+  for (const line of lines) {
+    const parts = line.trim().split(',');
+    if (parts.length < 3) continue;
+    const level = parseInt(parts[0].trim());
+    const title = parts[1].trim();
+    const page = parseInt(parts[2].trim());
+    if (!title || !page || !level) continue;
+
+    if (level === 1) {
+      curUnit = { title, page, lessons: [] };
+      units.push(curUnit);
+    } else if (level === 2 && curUnit) {
+      curUnit.lessons.push({ title, type: 'group', page });
+    } else if (level === 3 && curUnit) {
+      curUnit.lessons.push({ title, type: 'lesson', startPage: page });
+    }
+  }
+
+  if (units.length === 0) {
+    showToast('未解析到有效书签');
+    return;
+  }
+
+  // 计算 endPage
+  const allLessons = [];
+  units.forEach(u => u.lessons.forEach(l => { if (l.type === 'lesson') allLessons.push(l); }));
+  for (let i = 0; i < allLessons.length; i++) {
+    const next = i + 1 < allLessons.length ? allLessons[i + 1].startPage : 9999;
+    allLessons[i].endPage = Math.max(allLessons[i].startPage, next - 1);
+  }
+
+  t.units = units;
+  saveData(state);
+  showToast(`✅ 已导入 ${units.length} 个单元`);
   renderTocEditor(textbookId);
 }
 
@@ -1364,7 +1422,7 @@ async function tocAutoExtract(textbookId) {
       pageTexts.push(lines.join('\n'));
       fullText += lines.join('\n') + '\n\n';
     }
-    // 提取目录
+    // 提取目录：书签 → 字号提取 → 正则提取
     let units;
     let hadOutline = false;
     try {
@@ -1374,13 +1432,28 @@ async function tocAutoExtract(textbookId) {
         units = await extractUnitsFromOutline(pdf, outline, pdf.numPages);
       }
     } catch (e) {}
-    const hasLessons = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
+    let hasLessons = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
+
+    // 无书签或书签无课文 → 优先用字号提取
     if (!hasLessons) {
+      console.log('[目录解析] 书签无课文或无书签，尝试字号提取...');
+      const fontResult = await extractTocByFontSize(pdf);
+      if (fontResult && fontResult.units && fontResult.units.length > 0) {
+        units = fontResult.units;
+        t.pageOffset = fontResult.pageOffset || 0;
+        hasLessons = true;
+        console.log('[目录解析] ✅ 字号提取成功');
+      }
+    }
+
+    // 字号提取也失败 → 回退正则提取
+    if (!hasLessons) {
+      console.log('[目录解析] 字号提取无结果，使用正则扫描');
       const extracted = autoExtractToc(pageTexts, pdf.numPages, fullText);
       units = extracted && extracted.units;
       t.pageOffset = (extracted && extracted.pageOffset) || 0;
-    } else {
-      // 书签提取成功，也检测偏移
+    } else if (!hadOutline) {
+      // 字号提取成功，检测偏移
       t.pageOffset = detectPageOffset(pageTexts, units) || 0;
     }
     t.units = units;
@@ -1464,7 +1537,7 @@ function handlePdfUpload(file) {
         document.getElementById('pdfProgressFill').style.width = (40 + (i / pdf.numPages) * 50) + '%';
       }
 
-      // 统一提取方案：PDF 书签（若有）→ 自动扫描所有页面
+      // 统一提取方案：PDF 书签（若有）→ 字号提取 → 正则扫描
       let units;
       let hadOutline = false;
       try {
@@ -1477,15 +1550,29 @@ function handlePdfUpload(file) {
       } catch (e) {
         console.warn('[目录解析] 获取书签失败:', e);
       }
-      // 回退：用统一自动扫描
-      const hasLessons = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
+      let hasLessons = units && units.length > 0 && units.some(u => u.lessons.some(l => l.type === 'lesson'));
+
+      // 无书签或书签无课文 → 优先用字号提取
       if (!hasLessons) {
-        console.log('[目录解析] 书签无课文或无书签，使用自动扫描');
+        console.log('[目录解析] 书签无课文或无书签，尝试字号提取...');
+        document.getElementById('pdfStatus').textContent = '正在按字体大小提取目录...';
+        const fontResult = await extractTocByFontSize(pdf);
+        if (fontResult && fontResult.units && fontResult.units.length > 0) {
+          units = fontResult.units;
+          currentPdfData.pageOffset = fontResult.pageOffset || 0;
+          hasLessons = true;
+          console.log('[目录解析] ✅ 字号提取成功');
+        }
+      }
+
+      // 字号提取也失败 → 回退正则扫描
+      if (!hasLessons) {
+        console.log('[目录解析] 字号提取无结果，使用正则扫描');
         const extracted = autoExtractToc(pageTexts, pdf.numPages, fullText);
         units = extracted && extracted.units;
         currentPdfData.pageOffset = (extracted && extracted.pageOffset) || 0;
-      } else {
-        // 书签提取成功，也检测页码偏移
+      } else if (!hadOutline) {
+        // 字号提取成功，检测偏移
         currentPdfData.pageOffset = detectPageOffset(pageTexts, units) || 0;
       }
       // 最终兜底
@@ -2093,6 +2180,270 @@ function extractLessonsWithPages(fullText, pageTexts, totalPages) {
 function extractUnitsFromContent(pageTexts, totalPages) {
   const r = autoExtractToc(pageTexts, totalPages, '');
   return (r && r.units) || [];
+}
+
+/**
+ * 基于字体大小自动提取三级目录（移植自 Python auto_generate_toc）
+ * 思路：PDF.js 的 getTextContent() 返回每个文本块的 transform 矩阵，
+ * 其中 transform[0]（水平缩放）≈ 字体大小。
+ * 1. 扫描所有页面，收集每行文本及其最大字体大小
+ * 2. 统计字体大小分布，找出正文体（最常见字号）
+ * 3. 大于正文的为标题，按字体大小分3级：
+ *    - L1（最大）→ 单元：第X单元
+ *    - L2（中等）→ 栏目：阅读/写作
+ *    - L3（较小）→ 课文：1 春 / 2 济南的冬天
+ * 4. 用正则在标题行内进一步分类
+ */
+async function extractTocByFontSize(pdf) {
+  console.log('[字号提取] 开始扫描', pdf.numPages, '页...');
+
+  // 收集所有行：{ page, text, fontSize, y }
+  const allLines = [];
+  // 字体大小统计
+  const fontSizeCount = {};
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+
+    // 按 y 坐标分行，记录每行最大字号
+    const yMap = {};
+    for (const item of textContent.items) {
+      if (!item.str || !item.str.trim()) continue;
+      const y = Math.round(item.transform[5]);
+      // 字体大小 = transform[0]（水平缩放）或 item.height
+      const fontSize = Math.round((item.transform[0] || item.height || 0) * 10) / 10;
+      let lineKey = y;
+      for (const key of Object.keys(yMap)) {
+        if (Math.abs(parseInt(key) - y) <= 3) { lineKey = parseInt(key); break; }
+      }
+      if (!yMap[lineKey]) yMap[lineKey] = { items: [], maxFontSize: 0 };
+      yMap[lineKey].items.push({ x: item.transform[4], str: item.str, fontSize });
+      if (fontSize > yMap[lineKey].maxFontSize) yMap[lineKey].maxFontSize = fontSize;
+    }
+
+    const sortedYs = Object.keys(yMap).map(Number).sort((a, b) => b - a);
+    for (const y of sortedYs) {
+      const lineData = yMap[y];
+      const line = lineData.items.sort((a, b) => a.x - b.x).map(it => it.str).join('').trim();
+      if (line && line.length <= 50) {
+        const fs = lineData.maxFontSize;
+        allLines.push({ page: i, text: line, fontSize: fs, y });
+        fontSizeCount[fs] = (fontSizeCount[fs] || 0) + 1;
+      }
+    }
+  }
+
+  console.log('[字号提取] 总行数:', allLines.length);
+
+  // 找出正文体字大小（出现次数最多的）
+  let bodyFontSize = 0;
+  let maxCount = 0;
+  for (const [fs, count] of Object.entries(fontSizeCount)) {
+    const size = parseFloat(fs);
+    if (count > maxCount && size > 0) {
+      maxCount = count;
+      bodyFontSize = size;
+    }
+  }
+  console.log('[字号提取] 正文字号:', bodyFontSize, '（出现', maxCount, '次）');
+
+  if (bodyFontSize === 0) {
+    console.warn('[字号提取] 无法确定正文字号');
+    return null;
+  }
+
+  // 标题阈值：大于正文体 2pt 以上为标题
+  const titleThreshold = bodyFontSize + 1.5;
+  // 收集所有标题行
+  const titleLines = allLines.filter(l => l.fontSize >= titleThreshold);
+  console.log('[字号提取] 标题行:', titleLines.length, '（阈值:', titleThreshold, '）');
+
+  if (titleLines.length === 0) {
+    console.warn('[字号提取] 没找到标题行');
+    return null;
+  }
+
+  // 统计标题字号分布，分3级
+  const titleSizes = titleLines.map(l => l.fontSize).sort((a, b) => b - a);
+  // 去重
+  const uniqueSizes = [...new Set(titleSizes)];
+  console.log('[字号提取] 标题字号分布:', uniqueSizes);
+
+  // 分3级：最大的为L1，中间为L2，最小（但仍大于正文）为L3
+  let l1Size, l2Size, l3Size;
+  if (uniqueSizes.length >= 3) {
+    // 有3种以上标题字号：取最大的3个
+    l1Size = uniqueSizes[0];
+    l2Size = uniqueSizes[Math.floor(uniqueSizes.length / 2)];
+    l3Size = uniqueSizes[uniqueSizes.length - 1];
+  } else if (uniqueSizes.length === 2) {
+    l1Size = uniqueSizes[0];
+    l3Size = uniqueSizes[1];
+    l2Size = uniqueSizes[1]; // L2 和 L3 同级
+  } else {
+    // 只有一种标题字号，全部作为L3
+    l1Size = uniqueSizes[0];
+    l2Size = uniqueSizes[0];
+    l3Size = uniqueSizes[0];
+  }
+  console.log('[字号提取] L1:', l1Size, 'L2:', l2Size, 'L3:', l3Size);
+
+  // 正则模式
+  const unitRegex = /(?:第[一二三四五六七八九十百零〇两0-9]+(?:单元|章|节|部分|编|组)|Unit\s*\d+|单元\s*[一二三四五六七八九十百零〇两0-9]+)/;
+  const groupKeywords = ['阅读', '写作', '任务', '综合性学习', '课外古诗词诵读', '课外古诗词', '名著导读', '口语交际', '活动·探究', '活动探究', '诵读', '课文', '古诗词', '思考探究', '积累拓展', '读读写写', '写作实践', '研讨与练习'];
+  const lessonPatterns = [
+    /^(\d+)\*?\s+(.+)$/,
+    /^(\d+)\*?\s*[.．、]\s*(.+)$/,
+    /^([一二三四五六七八九十]+)[、.．]\s*(.+)$/,
+  ];
+
+  const units = [];
+  let curUnit = null;
+  let curGroup = null;
+  const entrySeen = new Set();
+
+  for (const { page, text, fontSize } of titleLines) {
+    if (text.length < 2) continue;
+
+    // L1: 检测单元
+    if (fontSize >= l1Size - 0.5) {
+      const m = text.match(unitRegex);
+      if (m) {
+        const title = m[0].trim();
+        if (!entrySeen.has('u:' + title)) {
+          entrySeen.add('u:' + title);
+          curUnit = { title, page, lessons: [] };
+          units.push(curUnit);
+          curGroup = null;
+          console.log('[字号提取] L1 单元:', title, '→ 第', page, '页 (字号', fontSize, ')');
+          continue;
+        }
+      }
+      // 大字号但不是单元格式，也作为单元
+      if (fontSize >= l1Size - 0.5 && !curUnit) {
+        const title = text.substring(0, 20);
+        curUnit = { title, page, lessons: [] };
+        units.push(curUnit);
+        curGroup = null;
+        console.log('[字号提取] L1（非标准）:', title, '→ 第', page, '页');
+        continue;
+      }
+    }
+
+    // L2: 检测栏目
+    if (curUnit && fontSize >= l2Size - 0.5) {
+      const isGroup = groupKeywords.some(kw => {
+        if (text === kw || text.startsWith(kw + '：') || text.startsWith(kw + ':')) return true;
+        if (text.startsWith(kw + '·') || text.startsWith(kw + '•')) return true;
+        return false;
+      });
+      if (isGroup) {
+        let groupName = text;
+        const colonIdx = text.search(/[：:·]/);
+        if (colonIdx > 0) groupName = text.substring(0, colonIdx).trim();
+        const key = 'g:' + groupName;
+        if (!entrySeen.has(key)) {
+          entrySeen.add(key);
+          curUnit.lessons.push({ title: groupName, type: 'group', page });
+          curGroup = groupName;
+          console.log('[字号提取] L2 栏目:', groupName, '→ 第', page, '页 (字号', fontSize, ')');
+          continue;
+        }
+      }
+    }
+
+    // L3: 检测课文
+    if (curUnit) {
+      let lessonMatch = null;
+      for (const pat of lessonPatterns) {
+        const m = text.match(pat);
+        if (m) { lessonMatch = m; break; }
+      }
+      if (lessonMatch) {
+        const [, num, rest] = lessonMatch;
+        let title = rest.replace(/[.．·•…]{2,}/g, ' ').replace(/\s+\d{1,4}$/, '').replace(/\s*[／\/]\s*.+$/, '').replace(/\s{2,}/g, ' ').trim();
+        if (title.length >= 2 && title.length <= 25) {
+          const star = lessonMatch[0].match(/^\d+\*?/)?.[0].endsWith('*') ? '*' : '';
+          const lessonTitle = num + star + ' ' + title;
+          if (!entrySeen.has('l:' + lessonTitle)) {
+            entrySeen.add('l:' + lessonTitle);
+            curUnit.lessons.push({ title: lessonTitle, type: 'lesson', startPage: page });
+            console.log('[字号提取] L3 课文:', lessonTitle, '→ 第', page, '页 (字号', fontSize, ')');
+            continue;
+          }
+        }
+      }
+
+      // 大标题但不是课文格式 → 可能是栏目或课文
+      if (fontSize >= l3Size - 0.5 && fontSize < l1Size - 0.5) {
+        // 检查是否像栏目
+        const isGroup = groupKeywords.some(kw => text.includes(kw));
+        if (isGroup && !entrySeen.has('g:' + text)) {
+          entrySeen.add('g:' + text);
+          curUnit.lessons.push({ title: text, type: 'group', page });
+          curGroup = text;
+          console.log('[字号提取] L2（推断）栏目:', text, '→ 第', page, '页');
+          continue;
+        }
+        // 否则当作课文
+        if (!entrySeen.has('l:' + text) && text.length >= 2 && text.length <= 25) {
+          entrySeen.add('l:' + text);
+          curUnit.lessons.push({ title: text, type: 'lesson', startPage: page });
+          console.log('[字号提取] L3（推断）课文:', text, '→ 第', page, '页');
+          continue;
+        }
+      }
+    }
+  }
+
+  // 清理空栏目和空单元
+  for (const u of units) {
+    const cleaned = [];
+    for (let i = 0; i < u.lessons.length; i++) {
+      const l = u.lessons[i];
+      if (l.type === 'group') {
+        let hasLessonAfter = false;
+        for (let j = i + 1; j < u.lessons.length; j++) {
+          if (u.lessons[j].type === 'group') break;
+          if (u.lessons[j].type === 'lesson') { hasLessonAfter = true; break; }
+        }
+        if (hasLessonAfter) cleaned.push(l);
+      } else {
+        cleaned.push(l);
+      }
+    }
+    u.lessons = cleaned;
+  }
+
+  // 计算 endPage
+  const allLessons = [];
+  units.forEach(u => u.lessons.forEach(l => { if (l.type === 'lesson') allLessons.push(l); }));
+  for (let i = 0; i < allLessons.length; i++) {
+    const next = i + 1 < allLessons.length ? allLessons[i + 1].startPage : pdf.numPages + 1;
+    allLessons[i].endPage = Math.max(allLessons[i].startPage || 1, next - 1);
+    if (allLessons[i].endPage > pdf.numPages) allLessons[i].endPage = pdf.numPages;
+    if (!allLessons[i].startPage) allLessons[i].startPage = 1;
+  }
+
+  const result = units.filter(u => u.lessons.some(l => l.type === 'lesson'));
+  console.log('[字号提取] ✅ 完成:', result.length, '个单元,', allLessons.length, '篇课文');
+
+  if (result.length === 0) return null;
+
+  // 检测页码偏移
+  const pageTexts = allLines.reduce((acc, line) => {
+    while (acc.length < line.page) acc.push('');
+    if (!acc[line.page - 1]) acc[line.page - 1] = '';
+    acc[line.page - 1] += line.text + '\n';
+    return acc;
+  }, []);
+  const offset = detectPageOffset(pageTexts, result);
+  if (offset !== 0) {
+    console.log('[字号提取] 📐 检测到页码偏移:', offset);
+  }
+
+  return { units: result, pageOffset: offset };
 }
 
 // 把提取到的目录结构写入 PDF 书签（outline）
