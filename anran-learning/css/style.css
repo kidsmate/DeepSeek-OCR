@@ -1962,6 +1962,157 @@ html, body {
   margin-right: 8px;
 }
 
+/* 答题区 */
+.quiz-input-area {
+  margin: 10px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.quiz-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: white;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.quiz-option:hover {
+  border-color: var(--primary);
+}
+.quiz-option input[type="radio"] {
+  margin: 0;
+  accent-color: var(--primary);
+}
+.quiz-opt-letter {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+.quiz-opt-text {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.quiz-fill-input,
+.quiz-short-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: inherit;
+  background: white;
+  box-sizing: border-box;
+}
+.quiz-fill-input:focus,
+.quiz-short-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.quiz-short-input {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* 答题结果高亮 */
+.exercise-item.correct {
+  border-left: 4px solid #27ae60;
+}
+.exercise-item.wrong {
+  border-left: 4px solid #e74c3c;
+}
+
+/* 答题进度条 */
+.quiz-progress-bar {
+  font-size: 13px;
+  color: var(--text-light);
+  margin-bottom: 12px;
+  padding: 6px 12px;
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+/* 提交按钮区 */
+.quiz-submit-bar {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  justify-content: center;
+}
+.quiz-result {
+  margin-top: 16px;
+}
+.quiz-result-card {
+  padding: 20px;
+  border-radius: 12px;
+  text-align: center;
+}
+.quiz-result-card.pass {
+  background: linear-gradient(135deg, #E8F8F3, #D4EFDF);
+  border: 2px solid #27ae60;
+}
+.quiz-result-card.fail {
+  background: linear-gradient(135deg, #FDEDEC, #FADBD8);
+  border: 2px solid #e74c3c;
+}
+.quiz-score {
+  font-size: 32px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+.quiz-result-card.pass .quiz-score { color: #27ae60; }
+.quiz-result-card.fail .quiz-score { color: #e74c3c; }
+.quiz-detail {
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.quiz-tip {
+  font-size: 13px;
+  color: var(--text-light);
+}
+
+/* 朗读按钮 */
+.read-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: 10px;
+}
+.read-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.read-btn:hover { opacity: 0.9; }
+.read-btn.done {
+  background: #27ae60;
+}
+.read-score {
+  font-size: 13px;
+  color: var(--text-light);
+}
+
 .ex-answer {
   background: #E8F8F3;
   border-radius: 10px;

@@ -329,10 +329,35 @@ function openLearnPage(subj, point) {
   const techs = content.techniques || [];
   const rh = content.rhetoric || [];
 
+  // 准备每节朗读用的纯文本
+  const readSections = [
+    {id: 'sum1', title: '1 知识总结', text: summaryText},
+    {id: 'sum2', title: '2 生词积累', text: vocab.map(v => `${v.word}${v.pinyin||''}：${v.meaning}`).join('。')},
+    {id: 'sum3', title: '3 成语释义', text: idioms.map(v => `${v.word}：${v.meaning}`).join('。')},
+    {id: 'sum4', title: '4 写作技巧', text: techs.map(t => `${t.name}：${t.desc}`).join('。')},
+    {id: 'sum5', title: '5 修辞手法', text: rh.map(r => `${r.type}：例句${r.example||''}；${r.analysis||''}`).join('。')},
+  ];
+
+  // 读取朗读进度
+  const readProg = state.readProgress && state.readProgress[point.id] || {};
+  // 朗读按钮模板：每节一个
+  function readBtnHtml(sec) {
+    const done = !!readProg[sec.id];
+    return `
+      <div class="read-bar" data-section-id="${sec.id}">
+        <button class="read-btn ${done ? 'done' : ''}" onclick="startReadAloud('${sec.id}', '${escapeHtml(point.id)}')">
+          ${done ? '✓ 已朗读' : '🎙️ 朗读本节'}
+        </button>
+        <span class="read-score" id="readScore-${sec.id}">${done ? '已完成' : '未朗读'}</span>
+      </div>
+    `;
+  }
+
   const summaryHtml = `
     <div class="sum-block">
       <div class="sum-block-title"><span class="sum-num">1</span>知识总结</div>
       <p class="learn-text">${escapeHtml(summaryText)}</p>
+      ${readBtnHtml(readSections[0])}
     </div>
 
     <div class="sum-block">
@@ -346,6 +371,7 @@ function openLearnPage(subj, point) {
           <div class="vocab-meaning">${escapeHtml(v.meaning)}</div>
         </div>
       `).join('') : '<p class="learn-text">暂无生词数据</p>'}
+      ${readBtnHtml(readSections[1])}
     </div>
 
     <div class="sum-block">
@@ -356,6 +382,7 @@ function openLearnPage(subj, point) {
           <div class="idiom-meaning">${escapeHtml(v.meaning)}</div>
         </div>
       `).join('') : '<p class="learn-text">暂无成语数据</p>'}
+      ${readBtnHtml(readSections[2])}
     </div>
 
     <div class="sum-block">
@@ -366,6 +393,7 @@ function openLearnPage(subj, point) {
           <div class="tech-desc">${escapeHtml(t.desc)}</div>
         </div>
       `).join('') : '<p class="learn-text">暂无写作技巧数据</p>'}
+      ${readBtnHtml(readSections[3])}
     </div>
 
     <div class="sum-block">
@@ -377,8 +405,13 @@ function openLearnPage(subj, point) {
           ${r.analysis ? `<div class="rh-analysis">${escapeHtml(r.analysis)}</div>` : ''}
         </div>
       `).join('') : '<p class="learn-text">暂无修辞手法数据</p>'}
+      ${readBtnHtml(readSections[4])}
     </div>
   `;
+
+  // 把朗读节列表挂到全局供 startReadAloud 使用
+  window.__currentReadSections = readSections;
+  window.__currentReadPointId = point.id;
 
   document.getElementById('learnSummary').innerHTML = summaryHtml;
 
@@ -400,34 +433,85 @@ function openLearnPage(subj, point) {
   // 教学视频
   renderLearnVideo(content.videoKeywords || point.title);
 
-  // 习题练习
+  // 习题练习：支持选择/判断/填空/简答四类题型，纵向布局，提供选项和输入框
   const exs = content.exercises || [];
+  // 兼容旧数据：无 type 字段的题，按 q/a 形式自动判断 type
+  exs.forEach(e => {
+    if (e.type) return;
+    if (Array.isArray(e.options) && e.options.length) {
+      e.type = 'choice';
+    } else if (e.a === '对' || e.a === '错' || /^(正确|错误|对|错)$/.test(e.a)) {
+      e.type = 'judge';
+    } else if (e.q && (e.q.includes('___') || e.q.includes('（  ）') || e.q.includes('（）') || e.q.includes('(  )') || e.q.includes('()'))) {
+      e.type = 'fill';
+    } else if (e.a && e.a.length >= 6) {
+      e.type = 'short';
+    } else {
+      e.type = 'fill';
+    }
+  });
+
+  const exTypeLabel = {choice:'选择题', judge:'判断题', fill:'填空题', short:'简答题'};
+  const exTypeIcon = {choice:'🔘', judge:'⚖️', fill:'✏️', short:'📝'};
+
   document.getElementById('learnExercise').innerHTML = `
     <div class="learn-section-title">✏️ 习题练习</div>
-    ${exs.length ? exs.map((e, i) => `
-      <div class="exercise-item" id="ex-${i}">
-        <div class="ex-q"><span class="ex-tag">第${i+1}题</span>${e.q}</div>
-        <div class="ex-answer" id="ex-ans-${i}" style="display:none;">
-          <div class="ex-ans-label">参考答案</div>
-          <div class="ex-ans-text">${e.a}</div>
-          <div class="ex-exp-label">解析</div>
-          <div class="ex-exp-text">${e.e}</div>
+    <div class="quiz-progress-bar" id="quizProgress"></div>
+    ${exs.length ? exs.map((e, i) => {
+      const type = e.type || 'fill';
+      let answerInput = '';
+      if (type === 'choice') {
+        const opts = e.options || [];
+        answerInput = opts.map((opt, oi) => `
+          <label class="quiz-option">
+            <input type="radio" name="quiz-${i}" value="${escapeHtml(opt)}" onchange="onQuizInput()">
+            <span class="quiz-opt-letter">${String.fromCharCode(65+oi)}</span>
+            <span class="quiz-opt-text">${escapeHtml(opt)}</span>
+          </label>
+        `).join('');
+      } else if (type === 'judge') {
+        answerInput = `
+          <label class="quiz-option"><input type="radio" name="quiz-${i}" value="对" onchange="onQuizInput()"><span class="quiz-opt-text">对</span></label>
+          <label class="quiz-option"><input type="radio" name="quiz-${i}" value="错" onchange="onQuizInput()"><span class="quiz-opt-text">错</span></label>
+        `;
+      } else if (type === 'fill') {
+        answerInput = `<input type="text" class="quiz-fill-input" name="quiz-${i}" placeholder="请填写答案" oninput="onQuizInput()">`;
+      } else {  // short
+        answerInput = `<textarea class="quiz-short-input" name="quiz-${i}" rows="3" placeholder="请填写答案" oninput="onQuizInput()"></textarea>`;
+      }
+      return `
+        <div class="exercise-item" id="ex-${i}">
+          <div class="ex-q">
+            <span class="ex-tag">${exTypeIcon[type]} ${exTypeLabel[type]}</span>
+            ${escapeHtml(e.q)}
+          </div>
+          <div class="quiz-input-area">${answerInput}</div>
+          <div class="ex-answer" id="ex-ans-${i}" style="display:none;">
+            <div class="ex-ans-label">参考答案</div>
+            <div class="ex-ans-text">${escapeHtml(e.a)}</div>
+            <div class="ex-exp-label">解析</div>
+            <div class="ex-exp-text">${escapeHtml(e.e)}</div>
+          </div>
         </div>
-        <button class="btn-secondary ex-toggle" onclick="toggleAnswer(${i})" id="ex-btn-${i}">查看答案与解析</button>
+      `;
+    }).join('') : '<p class="learn-text">暂无习题</p>'}
+    ${exs.length ? `
+      <div class="quiz-submit-bar">
+        <button class="btn-secondary" onclick="toggleAllQuizAnswers()">查看全部答案</button>
+        <button class="btn-primary" onclick="submitQuiz()" id="btnSubmitQuiz">提交答题</button>
       </div>
-    `).join('') : '<p class="learn-text">暂无习题</p>'}
+      <div class="quiz-result" id="quizResult"></div>
+    ` : ''}
   `;
 
-  // 标记已学按钮状态
-  const isLearned = !!state.learnedPoints[point.id];
-  const btn = document.getElementById('learnMarkBtn');
-  if (isLearned) {
-    btn.textContent = '取消标记 (-5🪙)';
-    btn.style.background = 'var(--danger)';
-  } else {
-    btn.textContent = '标记已学 (+5🪙)';
-    btn.style.background = 'var(--accent)';
-  }
+  // 把习题列表挂全局供 submitQuiz 使用
+  window.__currentExercises = exs;
+  window.__currentQuizPointId = point.id;
+  // 渲染已有成绩
+  renderQuizProgress();
+
+  // 标记已学按钮状态：朗读 + 习题通过才可点
+  updateLearnMarkBtnState();
 
   // 默认显示第一个 tab
   switchLearnSection('summary');
@@ -935,17 +1019,17 @@ function toggleAnswer(index) {
 
 function markLearnedFromPage() {
   if (!currentKnowledge) return;
-  markLearned();
-  // 重新渲染按钮
-  const isLearned = !!state.learnedPoints[currentKnowledge.point.id];
-  const btn = document.getElementById('learnMarkBtn');
-  if (isLearned) {
-    btn.textContent = '取消标记 (-5🪙)';
-    btn.style.background = 'var(--danger)';
-  } else {
-    btn.textContent = '标记已学 (+5🪙)';
-    btn.style.background = 'var(--accent)';
+  // 加上朗读和习题前置校验
+  if (!isAllReadDone(currentKnowledge.point.id)) {
+    showToast('请先完成所有知识点的朗读');
+    return;
   }
+  if (!isQuizPassed(currentKnowledge.point.id)) {
+    showToast('请先答对习题 70% 以上');
+    return;
+  }
+  markLearned();
+  updateLearnMarkBtnState();
 }
 
 function markLearned() {
@@ -2996,6 +3080,312 @@ function setupEventListeners() {
       if (e.target === m) m.classList.remove('show');
     });
   });
+}
+
+// ============================================
+// 朗读功能：speechSynthesis 朗读 + SpeechRecognition 识别打分
+// ============================================
+const READ_PASS_SCORE = 60;   // 朗读及格分
+
+function _normalizeText(s) {
+  return (s || '').toLowerCase().replace(/[\s\,\.\，\。\、\；\;\:：\!\?\？\「\」\"\'()（）\-]/g, '');
+}
+
+function _similarity(a, b) {
+  // 简易相似度：最长公共子串比
+  a = _normalizeText(a); b = _normalizeText(b);
+  if (!a || !b) return 0;
+  if (a === b) return 100;
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m + 1}, () => new Array(n + 1).fill(0));
+  let best = 0;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i-1] === b[j-1]) {
+        dp[i][j] = dp[i-1][j-1] + 1;
+        if (dp[i][j] > best) best = dp[i][j];
+      } else {
+        dp[i][j] = 0;
+      }
+    }
+  }
+  return Math.round(best / Math.max(m, n) * 100);
+}
+
+function _setReadBtnState(secId, done, score) {
+  const bar = document.querySelector(`.read-bar[data-section-id="${secId}"]`);
+  if (!bar) return;
+  const btn = bar.querySelector('.read-btn');
+  const lbl = bar.querySelector('.read-score');
+  if (done) {
+    btn.classList.add('done');
+    btn.textContent = '✓ 已朗读';
+    if (lbl) lbl.textContent = `已完成 · ${score}分`;
+  } else {
+    btn.classList.remove('done');
+    btn.textContent = '🎙️ 朗读本节';
+    if (lbl) lbl.textContent = score != null ? `${score}分，未及格` : '未朗读';
+  }
+}
+
+// 全局朗读状态
+let __readUtter = null;
+let __readRec = null;
+let __readTargetSecId = null;
+let __readTargetPointId = null;
+let __readRecognized = '';
+
+function startReadAloud(secId, pointId) {
+  if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+    // 不支持语音识别 → 跳过识别，直接朗读完算及格
+    _playTTSAndMark(secId, pointId);
+    return;
+  }
+  const sec = (window.__currentReadSections || []).find(s => s.id === secId);
+  if (!sec) return;
+  __readTargetSecId = secId;
+  __readTargetPointId = pointId;
+  __readRecognized = '';
+
+  // 1. 先用 TTS 朗读一遍
+  if ('speechSynthesis' in window) {
+    try { window.speechSynthesis.cancel(); } catch(e){}
+    __readUtter = new SpeechSynthesisUtterance(sec.text);
+    __readUtter.lang = 'zh-CN';
+    __readUtter.rate = 0.9;
+    __readUtter.onend = () => _startRecognition(sec);
+    __readUtter.onerror = () => _startRecognition(sec);
+    window.speechSynthesis.speak(__readUtter);
+    const lbl = document.getElementById('readScore-' + secId);
+    if (lbl) lbl.textContent = '🔊 朗读中…';
+    return;
+  }
+  _startRecognition(sec);
+}
+
+function _playTTSAndMark(secId, pointId) {
+  const sec = (window.__currentReadSections || []).find(s => s.id === secId);
+  if (!sec) return;
+  if ('speechSynthesis' in window) {
+    try { window.speechSynthesis.cancel(); } catch(e){}
+    const u = new SpeechSynthesisUtterance(sec.text);
+    u.lang = 'zh-CN';
+    u.rate = 0.9;
+    u.onend = () => {
+      _markReadDone(secId, pointId, 100);
+      showToast('✅ 已朗读完成');
+    };
+    window.speechSynthesis.speak(u);
+  } else {
+    _markReadDone(secId, pointId, 100);
+  }
+}
+
+function _startRecognition(sec) {
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Rec) {
+    _markReadDone(sec.id, __readTargetPointId, 100);
+    return;
+  }
+  const lbl = document.getElementById('readScore-' + sec.id);
+  if (lbl) lbl.textContent = '🎙️ 请跟读…';
+  __readRec = new Rec();
+  __readRec.lang = 'zh-CN';
+  __readRec.continuous = true;
+  __readRec.interimResults = false;
+  __readRec.onresult = (e) => {
+    let txt = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) txt += e.results[i][0].transcript;
+    }
+    __readRecognized += txt;
+  };
+  __readRec.onerror = (e) => {
+    if (lbl) lbl.textContent = '识别失败，请重试';
+  };
+  __readRec.onend = () => {
+    const score = _similarity(sec.text, __readRecognized);
+    const passed = score >= READ_PASS_SCORE;
+    _markReadDone(sec.id, __readTargetPointId, passed ? score : score, passed);
+    if (!passed) {
+      showToast(`朗读评分 ${score} 分，需 ${READ_PASS_SCORE} 分以上才算完成`);
+    }
+  };
+  try { __readRec.start(); } catch(e) {
+    _markReadDone(sec.id, __readTargetPointId, 100, true);
+  }
+}
+
+function _markReadDone(secId, pointId, score, passed = true) {
+  if (!state.readProgress) state.readProgress = {};
+  if (!state.readProgress[pointId]) state.readProgress[pointId] = {};
+  if (passed) {
+    state.readProgress[pointId][secId] = { score, ts: Date.now() };
+    _setReadBtnState(secId, true, score);
+  } else {
+    _setReadBtnState(secId, false, score);
+  }
+  saveData(state);
+  // 更新"标记已学"按钮可用状态
+  updateLearnMarkBtnState();
+}
+
+function isAllReadDone(pointId) {
+  const prog = state.readProgress && state.readProgress[pointId] || {};
+  // 5 节全部朗读完成才算完成
+  return ['sum1','sum2','sum3','sum4','sum5'].every(id => prog[id] && prog[id].score >= READ_PASS_SCORE);
+}
+
+// ============================================
+// 习题提交校验
+// ============================================
+const QUIZ_PASS_RATIO = 0.7;   // 习题答对 70% 以上才算通过
+
+function isQuizPassed(pointId) {
+  const prog = state.quizProgress && state.quizProgress[pointId] || {};
+  return prog && prog.passed === true;
+}
+
+function getQuizScore(pointId) {
+  const prog = state.quizProgress && state.quizProgress[pointId] || {};
+  return prog.score != null ? prog.score : -1;
+}
+
+function updateLearnMarkBtnState() {
+  if (!currentKnowledge) return;
+  const { point } = currentKnowledge;
+  const btn = document.getElementById('learnMarkBtn');
+  if (!btn) return;
+  const isLearned = !!state.learnedPoints[point.id];
+  if (isLearned) {
+    btn.textContent = '取消标记 (-5🪙)';
+    btn.style.background = 'var(--danger)';
+    btn.disabled = false;
+    return;
+  }
+  const readOk = isAllReadDone(point.id);
+  const quizOk = isQuizPassed(point.id);
+  if (readOk && quizOk) {
+    btn.textContent = '标记已学 (+5🪙)';
+    btn.style.background = 'var(--accent)';
+    btn.disabled = false;
+  } else {
+    const tips = [];
+    if (!readOk) tips.push('朗读未全部完成');
+    if (!quizOk) tips.push('习题未答对 70%');
+    btn.textContent = '🔒 ' + tips.join('，');
+    btn.style.background = '#aaa';
+    btn.disabled = true;
+  }
+}
+
+// ============================================
+// 习题答题：提交、判分、查看答案
+// ============================================
+function _normalizeAns(s) {
+  return String(s || '').trim().toLowerCase().replace(/[\s\,\.\，\。\、\；\;\:：\!\?\？\「\」\"\'()（）]/g, '');
+}
+
+function _isAnswerCorrect(ex, userAns) {
+  const std = _normalizeAns(ex.a);
+  const u = _normalizeAns(userAns);
+  if (!u) return false;
+  if (ex.type === 'judge') {
+    return u === std || (u === '对' && std === '正确') || (u === '错' && std === '错误');
+  }
+  if (ex.type === 'choice') {
+    return u === std || std.includes(u);
+  }
+  if (ex.type === 'fill') {
+    return u === std || std.includes(u) || u.includes(std);
+  }
+  // 简答：相似度 50% 算对
+  return _similarity(std, u) >= 50;
+}
+
+function _getUserAnswer(idx) {
+  const ex = (window.__currentExercises || [])[idx];
+  if (!ex) return '';
+  if (ex.type === 'choice' || ex.type === 'judge') {
+    const sel = document.querySelector(`input[name="quiz-${idx}"]:checked`);
+    return sel ? sel.value : '';
+  }
+  const inp = document.querySelector(`[name="quiz-${idx}"]`);
+  return inp ? inp.value : '';
+}
+
+function onQuizInput() {
+  // 实时更新进度
+  renderQuizProgress();
+}
+
+function renderQuizProgress() {
+  const exs = window.__currentExercises || [];
+  if (!exs.length) return;
+  let answered = 0;
+  exs.forEach((e, i) => {
+    if (_getUserAnswer(i)) answered++;
+  });
+  const bar = document.getElementById('quizProgress');
+  if (bar) bar.textContent = `已答 ${answered} / ${exs.length} 题`;
+}
+
+function toggleAllQuizAnswers() {
+  const exs = window.__currentExercises || [];
+  exs.forEach((e, i) => {
+    const ans = document.getElementById('ex-ans-' + i);
+    if (ans) ans.style.display = (ans.style.display === 'none' ? 'block' : 'none');
+  });
+}
+
+function submitQuiz() {
+  const exs = window.__currentExercises || [];
+  if (!exs.length) {
+    showToast('暂无习题');
+    return;
+  }
+  let correct = 0;
+  const results = [];
+  exs.forEach((e, i) => {
+    const userAns = _getUserAnswer(i);
+    const ok = _isAnswerCorrect(e, userAns);
+    if (ok) correct++;
+    results.push({ idx: i, ok, userAns, stdAns: e.a });
+    // 高亮该题
+    const item = document.getElementById('ex-' + i);
+    if (item) {
+      item.classList.remove('correct', 'wrong');
+      item.classList.add(ok ? 'correct' : 'wrong');
+    }
+    // 显示该题答案
+    const ans = document.getElementById('ex-ans-' + i);
+    if (ans) ans.style.display = 'block';
+  });
+  const total = exs.length;
+  const score = Math.round(correct / total * 100);
+  const passed = score >= QUIZ_PASS_RATIO * 100;
+
+  // 保存到 state.quizProgress
+  if (!state.quizProgress) state.quizProgress = {};
+  state.quizProgress[window.__currentQuizPointId] = { score, correct, total, passed, ts: Date.now() };
+  saveData(state);
+
+  const result = document.getElementById('quizResult');
+  if (result) {
+    result.innerHTML = `
+      <div class="quiz-result-card ${passed ? 'pass' : 'fail'}">
+        <div class="quiz-score">${score}分</div>
+        <div class="quiz-detail">答对 ${correct} / ${total} 题（${passed ? '通过' : '未通过'}，需 ${Math.round(QUIZ_PASS_RATIO*100)}分以上）</div>
+        ${passed ? '<div class="quiz-tip">✅ 已通过习题，可以标记已学</div>' : '<div class="quiz-tip">❌ 未通过，请查看每题答案后重新提交</div>'}
+      </div>
+    `;
+  }
+  if (passed) {
+    showToast(`✅ 习题通过，${score}分`);
+  } else {
+    showToast(`❌ 习题未通过，${score}分，需 ${Math.round(QUIZ_PASS_RATIO*100)}分以上`);
+  }
+  updateLearnMarkBtnState();
 }
 
 // 启动
