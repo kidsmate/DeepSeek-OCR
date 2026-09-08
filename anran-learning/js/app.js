@@ -144,27 +144,55 @@ function renderDashboard() {
   renderCalendar();
 }
 
+// 5 个核心学科：每天每科 1 个任务，按各科单元顺序推进
+const CORE_SUBJECT_IDS = ['chinese', 'math', 'english', 'history', 'morality'];
+
+function _seedHash(str) {
+  // 简单字符串哈希，作为 (日期+学科+章节) 的伪随机种子
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+function _dailyRand(seedStr) {
+  // 同一种子每次都返回相同 0..1 的伪随机数，保证一天内任务稳定
+  const x = Math.sin(_seedHash(seedStr)) * 10000;
+  return x - Math.floor(x);
+}
+
 function renderTodayTasks() {
   const grid = document.getElementById('todayTasks');
-  // 找未学的知识点，每个学科取1个，凑够 dailyGoal 个
+  const today = todayStr();
+
+  // 清理可能遗留的"今日完成"横幅
+  const oldBanner = grid.previousElementSibling;
+  if (oldBanner && oldBanner.classList && oldBanner.classList.contains('today-tasks-done-banner')) {
+    oldBanner.remove();
+  }
+
+  // 每科按单元（chapter）顺序找第一个含未学知识点的章节，
+  // 在该章节未学知识点中按 (日期+学科+章节) 随机选 1 个
   const tasks = [];
-  for (const subj of SUBJECTS) {
+  for (const subjId of CORE_SUBJECT_IDS) {
+    const subj = SUBJECTS.find(s => s.id === subjId);
+    if (!subj) continue;
     for (const chap of subj.chapters) {
-      for (const p of chap.points) {
-        if (!state.learnedPoints[p.id] && tasks.length < state.dailyGoal) {
-          tasks.push({ subject: subj, point: p });
-        }
-      }
+      const unlearned = chap.points.filter(p => !state.learnedPoints[p.id]);
+      if (unlearned.length === 0) continue;
+      const seed = today + ':' + subjId + ':' + chap.title;
+      const idx = Math.floor(_dailyRand(seed) * unlearned.length);
+      tasks.push({ subject: subj, point: unlearned[idx], chapter: chap });
+      break;  // 每科只取一个任务
     }
-    if (tasks.length >= state.dailyGoal) break;
   }
 
   if (tasks.length === 0) {
-    grid.innerHTML = '<div class="empty-state"><div class="empty-icon">🎉</div>太棒了！所有知识点都学完啦</div>';
+    grid.innerHTML = '<div class="empty-state"><div class="empty-icon">🎉</div>太棒了！5 科任务全部学完啦</div>';
     return;
   }
 
-  const today = todayStr();
   const todayCount = todayLearnedCount(state);
 
   grid.innerHTML = tasks.map(t => {
@@ -174,18 +202,18 @@ function renderTodayTasks() {
         <div class="task-icon" style="background:${hexToRgba(t.subject.color,0.12)}">${t.subject.icon}</div>
         <div class="task-info">
           <div class="task-name">${t.point.title}</div>
-          <div class="task-sub">${t.subject.name} · ${t.subject.chapters.find(c=>c.points.some(p=>p.id===t.point.id)).title}</div>
+          <div class="task-sub">${t.subject.name} · ${t.chapter.title}</div>
         </div>
         <div class="task-check">${learned ? '✓' : ''}</div>
       </div>
     `;
   }).join('');
 
-  // 今日进度提示
-  if (todayCount >= state.dailyGoal) {
+  // 今日进度提示（5 科全部完成才显示）
+  if (todayCount >= CORE_SUBJECT_IDS.length) {
     grid.insertAdjacentHTML('beforebegin',
-      `<div style="background:linear-gradient(135deg,#00B894,#55EFC4);color:white;padding:12px 16px;border-radius:12px;margin-bottom:12px;font-weight:600;">
-        🎉 今日目标已完成（${todayCount}/${state.dailyGoal}），继续保持！
+      `<div class="today-tasks-done-banner" style="background:linear-gradient(135deg,#00B894,#55EFC4);color:white;padding:12px 16px;border-radius:12px;margin-bottom:12px;font-weight:600;">
+        🎉 今日 5 科任务已全部完成（${todayCount}/${CORE_SUBJECT_IDS.length}），继续保持！
       </div>`);
   }
 }
