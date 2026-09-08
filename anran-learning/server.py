@@ -30,6 +30,32 @@ def _is_unit_title(text):
     return True
 
 
+def _find_units_in_body(page_lines, skip_pages):
+    """在正文中扫描所有"第X单元"字样的标题行（不依赖字号）。
+
+    这是增强步骤：有些 PDF 的单元标题用粗体而非更大字号，
+    仅靠"字号 > 正文"会漏掉单元。这里直接用正则在所有正文页中找，
+    确保每个单元都被识别为一级书签。
+    """
+    units = []   # [{page, text}]
+    seen = set()
+    for p in sorted(page_lines.keys()):
+        if p in skip_pages:
+            continue
+        # 一页可能有多个 line，按 y 从上到下找第一个单元标题
+        page_lines_sorted = sorted(page_lines[p], key=lambda l: -l['y'])
+        for line in page_lines_sorted:
+            text = line['text'].strip()
+            if _is_unit_title(text):
+                key = text
+                if key in seen:
+                    continue
+                seen.add(key)
+                units.append({'page': p, 'text': text})
+                break   # 一页只取第一个单元标题
+    return units
+
+
 def _is_lesson_l2(text):
     """判定二级文章：编号开头（1 春 / 3* 雨的四季）或栏目关键词开头（写作/综合性学习/名著导读/课外古诗词诵读）"""
     text = text.strip()
@@ -185,36 +211,74 @@ def extract_toc_with_fitz(pdf_bytes):
     # 按页码、y 坐标排序（先按页，再按 y 从上到下，即降序）
     title_lines.sort(key=lambda l: (l['page'], -l['y']))
 
-    if not title_lines:
-        return {'units': [], 'pageOffset': 0, 'totalPages': total_pages,
-                'method': 'none', 'bodyFont': body_font}
+    # ★ 关键增强：先在正文中用正则找出所有"第X单元"（不依赖字号）
+    # 解决"单元标题用粗体而非更大字号"导致单元漏识别的问题
+    body_units = _find_units_in_body(page_lines, skip_pages)
 
-    # 按规则构建三级目录
     units = []
-    cur_unit = None
-    cur_l2 = None
-    for line in title_lines:
-        text = line['text'].strip()
-        page = line['page']
-        if _is_unit_title(text):
-            cur_unit = {'title': text, 'page': page, 'lessons': []}
-            units.append(cur_unit)
-            cur_l2 = None
-        elif _is_lesson_l2(text):
-            if cur_unit is None:
-                cur_unit = {'title': '未命名单元', 'page': page, 'lessons': []}
-                units.append(cur_unit)
-            is_group = any(text.startswith(kw) for kw in GROUP_KEYWORDS)
-            if is_group:
+    if body_units:
+        # 用正则找到的单元作为 L1，按页码切分填充 L2/L3
+        unit_pages = [u['page'] for u in body_units]
+        for u_info in body_units:
+            units.append({'title': u_info['text'], 'page': u_info['page'], 'lessons': []})
+
+        cur_unit_idx = -1
+        cur_l2 = None
+        for line in title_lines:
+            text = line['text'].strip()
+            page = line['page']
+
+            # 检查是否进入新单元（按页码切分）
+            while cur_unit_idx + 1 < len(units) and page >= units[cur_unit_idx + 1]['page']:
+                cur_unit_idx += 1
                 cur_l2 = None
-                cur_unit['lessons'].append({'title': text, 'type': 'group', 'page': page})
+
+            if cur_unit_idx < 0:
+                continue   # 第一个单元之前的内容，跳过
+
+            cur_unit = units[cur_unit_idx]
+
+            # 跳过单元标题本身（已经在 unit.title 里了）
+            if _is_unit_title(text) and text == cur_unit['title']:
+                continue
+
+            if _is_lesson_l2(text):
+                is_group = any(text.startswith(kw) for kw in GROUP_KEYWORDS)
+                if is_group:
+                    cur_l2 = None
+                    cur_unit['lessons'].append({'title': text, 'type': 'group', 'page': page})
+                else:
+                    cur_l2 = {'title': text, 'type': 'lesson', 'startPage': page, 'children': []}
+                    cur_unit['lessons'].append(cur_l2)
             else:
-                cur_l2 = {'title': text, 'type': 'lesson', 'startPage': page, 'children': []}
-                cur_unit['lessons'].append(cur_l2)
-        else:
-            # L3 子篇目：必须有 L2 父，否则丢弃（封面/版权页的杂项大字）
-            if cur_l2 is not None:
-                cur_l2['children'].append({'title': text, 'type': 'sublesson', 'startPage': page})
+                # L3 子篇目：必须有 L2 父
+                if cur_l2 is not None:
+                    cur_l2['children'].append({'title': text, 'type': 'sublesson', 'startPage': page})
+    else:
+        # 没有用正则找到单元 → 回退到字号 + 正则规则
+        cur_unit = None
+        cur_l2 = None
+        for line in title_lines:
+            text = line['text'].strip()
+            page = line['page']
+            if _is_unit_title(text):
+                cur_unit = {'title': text, 'page': page, 'lessons': []}
+                units.append(cur_unit)
+                cur_l2 = None
+            elif _is_lesson_l2(text):
+                if cur_unit is None:
+                    cur_unit = {'title': '未命名单元', 'page': page, 'lessons': []}
+                    units.append(cur_unit)
+                is_group = any(text.startswith(kw) for kw in GROUP_KEYWORDS)
+                if is_group:
+                    cur_l2 = None
+                    cur_unit['lessons'].append({'title': text, 'type': 'group', 'page': page})
+                else:
+                    cur_l2 = {'title': text, 'type': 'lesson', 'startPage': page, 'children': []}
+                    cur_unit['lessons'].append(cur_l2)
+            else:
+                if cur_l2 is not None:
+                    cur_l2['children'].append({'title': text, 'type': 'sublesson', 'startPage': page})
 
     _compute_endpages_v2(units, total_pages)
     units = [u for u in units if any(l['type'] == 'lesson' for l in u['lessons'])]
@@ -225,7 +289,8 @@ def extract_toc_with_fitz(pdf_bytes):
         'totalPages': total_pages,
         'method': 'fontsize',
         'bodyFont': body_font,
-        'titleCount': len(title_lines)
+        'titleCount': len(title_lines),
+        'bodyUnitsFound': len(body_units)
     }
 
 
