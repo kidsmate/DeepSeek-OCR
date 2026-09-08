@@ -340,6 +340,58 @@ function openLearnPage(subj, point) {
     `).join('') : '<p class="learn-text">暂无核心要点</p>'}
   `;
 
+  // 生词解释
+  const vocab = content.vocab || [];
+  document.getElementById('learnVocab').innerHTML = `
+    <div class="learn-section-title">📖 生词解释</div>
+    ${vocab.length ? vocab.map(v => `
+      <div class="vocab-item">
+        <div class="vocab-head">
+          <span class="vocab-word">${escapeHtml(v.word)}</span>
+          ${v.pinyin ? `<span class="vocab-pinyin">[${escapeHtml(v.pinyin)}]</span>` : ''}
+        </div>
+        <div class="vocab-meaning">${escapeHtml(v.meaning)}</div>
+      </div>
+    `).join('') : '<p class="learn-text">暂无生词数据</p>'}
+  `;
+
+  // 成语释义
+  const idioms = content.idioms || [];
+  document.getElementById('learnIdioms').innerHTML = `
+    <div class="learn-section-title">💬 成语释义</div>
+    ${idioms.length ? idioms.map(v => `
+      <div class="idiom-item">
+        <div class="idiom-word">${escapeHtml(v.word)}</div>
+        <div class="idiom-meaning">${escapeHtml(v.meaning)}</div>
+      </div>
+    `).join('') : '<p class="learn-text">暂无成语数据</p>'}
+  `;
+
+  // 写作手法
+  const techs = content.techniques || [];
+  document.getElementById('learnTechniques').innerHTML = `
+    <div class="learn-section-title">✍️ 写作手法</div>
+    ${techs.length ? techs.map(t => `
+      <div class="tech-item">
+        <div class="tech-name">${escapeHtml(t.name)}</div>
+        <div class="tech-desc">${escapeHtml(t.desc)}</div>
+      </div>
+    `).join('') : '<p class="learn-text">暂无写作手法数据</p>'}
+  `;
+
+  // 修辞手法
+  const rh = content.rhetoric || [];
+  document.getElementById('learnRhetoric').innerHTML = `
+    <div class="learn-section-title">🎭 修辞手法</div>
+    ${rh.length ? rh.map(r => `
+      <div class="rh-item">
+        <div class="rh-type">${escapeHtml(r.type)}</div>
+        ${r.example ? `<div class="rh-example">「${escapeHtml(r.example)}」</div>` : ''}
+        ${r.analysis ? `<div class="rh-analysis">${escapeHtml(r.analysis)}</div>` : ''}
+      </div>
+    `).join('') : '<p class="learn-text">暂无修辞手法数据</p>'}
+  `;
+
   // 教材内容（从上传的 PDF 关联）
   renderLearnTextbook(subj, point);
 

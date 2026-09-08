@@ -1309,6 +1309,103 @@ html, body {
   padding-top: 2px;
 }
 
+/* ===== 生词解释 ===== */
+.vocab-item {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.vocab-item:last-child { border-bottom: none; }
+.vocab-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.vocab-word {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--primary);
+}
+.vocab-pinyin {
+  font-size: 13px;
+  color: var(--text-light);
+  font-style: italic;
+}
+.vocab-meaning {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+/* ===== 成语释义 ===== */
+.idiom-item {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.idiom-item:last-child { border-bottom: none; }
+.idiom-word {
+  font-size: 16px;
+  font-weight: 700;
+  color: #27ae60;
+  margin-bottom: 6px;
+}
+.idiom-meaning {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+/* ===== 写作手法 ===== */
+.tech-item {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tech-item:last-child { border-bottom: none; }
+.tech-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #2980b9;
+  margin-bottom: 6px;
+}
+.tech-desc {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+/* ===== 修辞手法 ===== */
+.rh-item {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.rh-item:last-child { border-bottom: none; }
+.rh-type {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+  background: linear-gradient(135deg, #e67e22, #f39c12);
+  padding: 3px 12px;
+  border-radius: 14px;
+  margin-bottom: 8px;
+}
+.rh-example {
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin: 6px 0;
+  font-style: italic;
+  border-left: 3px solid #f39c12;
+}
+.rh-analysis {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
 /* 教材内容 */
 .textbook-ref {
   background: var(--bg);
