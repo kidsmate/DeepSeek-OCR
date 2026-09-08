@@ -1546,6 +1546,12 @@ html, body {
   padding-left: 34px;
 }
 
+.tb-toc-sublesson {
+  padding-left: 52px;
+  font-size: 13px;
+  color: var(--text-light);
+}
+
 .tb-toc-item:hover {
   background: rgba(108, 92, 231, 0.08);
 }

@@ -452,12 +452,15 @@ function renderBookReader(units, ti, point) {
   });
   if (matchedU < 0) { matchedU = 0; matchedL = 0; }
 
-  // 构建所有课文的扁平列表（仅 type=lesson 的文章，group 不参与导航）
+  // 构建所有可导航项的扁平列表（lesson + sublesson，group 不参与导航）
   const allLessons = [];
   units.forEach((u, ui) => {
     u.lessons.forEach((l, li) => {
-      if (l.type !== 'group') {
-        allLessons.push({ unitTitle: u.title, ui, li, ...l });
+      if (l.type === 'lesson') {
+        allLessons.push({ unitTitle: u.title, ui, li, subIdx: -1, ...l });
+        (l.children || []).forEach((sub, si) => {
+          allLessons.push({ unitTitle: u.title, ui, li, subIdx: si, ...sub });
+        });
       }
     });
   });
@@ -482,20 +485,34 @@ function renderBookReader(units, ti, point) {
     html += `<div class="tb-toc-unit-label">${escapeHtml(u.title)}</div>`;
     u.lessons.forEach((l, li) => {
       if (l.type === 'group') {
-        // 二级栏目：缩进一级，不可点击
+        // 栏目：缩进，不可点击
         html += `<div class="tb-toc-group">${escapeHtml(l.title)}</div>`;
       } else {
-        // 三级文章：缩进两级，可点击
-        const fIdx = allLessons.findIndex(x => x.ui === ui && x.li === li);
+        // 二级文章：可点击
+        const fIdx = allLessons.findIndex(x => x.ui === ui && x.li === li && x.subIdx === -1);
         const active = (ui === matchedU && li === matchedL);
         const pageTag = l.startPage ? `<span class="tb-toc-page">${l.startPage}</span>` : '';
         html += `
-          <div class="tb-toc-item tb-toc-lesson ${active ? 'active' : ''}" 
+          <div class="tb-toc-item tb-toc-lesson ${active ? 'active' : ''}"
                id="tb-toc-item-${ti}-${fIdx}"
                onclick="selectBookLesson('${ti}', ${fIdx})">
             <span class="tb-toc-text">${escapeHtml(l.title)}</span>${pageTag}
           </div>
         `;
+        // 三级子篇目（如果有）：更深的缩进，可点击
+        (l.children || []).forEach((sub, si) => {
+          const sIdx = allLessons.findIndex(x => x.ui === ui && x.li === li && x.subIdx === si);
+          if (sIdx < 0) return;
+          const subActive = false;
+          const subPageTag = sub.startPage ? `<span class="tb-toc-page">${sub.startPage}</span>` : '';
+          html += `
+            <div class="tb-toc-item tb-toc-sublesson ${subActive ? 'active' : ''}"
+                 id="tb-toc-item-${ti}-${sIdx}"
+                 onclick="selectBookLesson('${ti}', ${sIdx})">
+              <span class="tb-toc-text">${escapeHtml(sub.title)}</span>${subPageTag}
+            </div>
+          `;
+        });
       }
     });
   });
@@ -2507,12 +2524,18 @@ async function addBookmarksToPdf(arrayBuffer, units) {
     }
     const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
 
-    // 构建 pdf-lib 的 outline 结构
+    // 构建 pdf-lib 的 outline 结构（三级：group → lesson → sublesson）
     const buildOutline = (lessons) => {
       const items = [];
       let i = 0;
       while (i < lessons.length) {
         const l = lessons[i];
+        // 子篇目书签构造（lesson 自己的 children）
+        const subChildrenOf = (lesson) => (lesson.children || []).map(sub => ({
+          title: sub.title,
+          pageIndex: Math.max(0, (sub.startPage || 1) - 1),
+          children: [],
+        }));
         if (l.type === 'group') {
           // 收集这个栏目下的所有课文
           const children = [];
@@ -2522,7 +2545,7 @@ async function addBookmarksToPdf(arrayBuffer, units) {
             children.push({
               title: lesson.title,
               pageIndex: Math.max(0, (lesson.startPage || 1) - 1),
-              children: [],
+              children: subChildrenOf(lesson),
             });
             i++;
           }
@@ -2536,7 +2559,7 @@ async function addBookmarksToPdf(arrayBuffer, units) {
           items.push({
             title: l.title,
             pageIndex: Math.max(0, (l.startPage || 1) - 1),
-            children: [],
+            children: subChildrenOf(l),
           });
           i++;
         }

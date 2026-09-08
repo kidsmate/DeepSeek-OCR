@@ -10,57 +10,111 @@ from urllib.parse import unquote
 PORT = 8080
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# 人教版初中语文目录正则
-UNIT_RE = re.compile(r'(?:第[一二三四五六七八九十百零〇两0-9]+(?:单元|章|节|部分|编|组)|Unit\s*\d+|单元\s*[一二三四五六七八九十百零〇两0-9]+)')
-GROUP_KEYWORDS = ['阅读', '写作', '任务', '综合性学习', '课外古诗词诵读', '课外古诗词',
-                  '名著导读', '口语交际', '活动·探究', '活动探究', '诵读',
-                  '课文', '古诗词', '思考探究', '积累拓展', '读读写写', '写作实践',
-                  '研讨与练习', '汉语知识', '语法知识']
-LESSON_PATTERNS = [
-    re.compile(r'^(\d+)\*?\s*[.．、]?\s*(.+)'),
-    re.compile(r'^([一二三四五六七八九十]+)[、.．]\s*(.+)'),
-]
+# 人教版初中语文目录正则与关键词（参考用户的 Python 书签程序）
+UNIT_RE = re.compile(r'第[一二三四五六七八九十百零〇两0-9]+单元')
+GROUP_KEYWORDS = ['写作', '综合性学习', '名著导读', '课外古诗词诵读', '课外古诗词',
+                  '口语交际', '活动·探究', '活动探究', '任务', '汉语知识', '语法知识']
+LESSON_NUM_RE = re.compile(r'^\d+\*?\s*[.．、]?\s*\S')
+# 版权/编目页关键词
+SKIP_KEYWORDS = ['版权所有', '著作权所有', 'ISBN', 'CIP', '图书在版编目', '出版发行']
+
+
+def _is_unit_title(text):
+    """严格判定单元标题：第X单元（X 为汉字或数字）。"""
+    text = text.strip()
+    if not UNIT_RE.search(text):
+        return False
+    # 单元标题很短（≤ 15 字），避免误把含单元词的长句识别为标题
+    if len(text) > 15:
+        return False
+    return True
+
+
+def _is_lesson_l2(text):
+    """判定二级文章：编号开头（1 春 / 3* 雨的四季）或栏目关键词开头（写作/综合性学习/名著导读/课外古诗词诵读）"""
+    text = text.strip()
+    if LESSON_NUM_RE.match(text):
+        return True
+    for kw in GROUP_KEYWORDS:
+        if text.startswith(kw):
+            return True
+    return False
 
 
 def _is_running_header(text_pages_map, text, total_pages):
-    """判断某行文本是否为页眉/页脚（在多页重复出现）。"""
+    """页眉/页脚判定：在多页重复出现的文本。"""
     pages = text_pages_map.get(text)
     if not pages:
         return False
-    # 同一文本出现在 >5 页 或 > 总页数 10% → 视为页眉页脚
     if len(pages) > 5 or len(pages) > max(3, total_pages * 0.1):
         return True
     return False
 
 
-def _compute_endpages(units, total_pages):
-    """为所有 lesson 计算 endPage = 下一篇 startPage - 1。"""
-    all_lessons = [l for u in units for l in u['lessons'] if l['type'] == 'lesson']
-    for i, lesson in enumerate(all_lessons):
-        if 'startPage' not in lesson:
-            lesson['startPage'] = 1
-        nxt = all_lessons[i + 1]['startPage'] if i + 1 < len(all_lessons) else total_pages + 1
-        lesson['endPage'] = max(lesson['startPage'], nxt - 1)
-        if lesson['endPage'] > total_pages:
-            lesson['endPage'] = total_pages
+def _detect_skip_pages(page_lines):
+    """检测需要跳过的页：目录页、版权页。封面靠"L3 必须有 L2 父"规则自动过滤。"""
+    skip = set()
+    for p, lines in page_lines.items():
+        text_all = "\n".join(l['text'] for l in lines)
+        # 版权/编目页
+        if any(kw in text_all for kw in SKIP_KEYWORDS):
+            skip.add(p)
+            continue
+        # 目录页：含"目录"标题字样，或同时出现多个单元 + 多个编号条目
+        has_toc_title = any('目录' in l['text'] and len(l['text'].strip()) <= 4 and l['fontsize'] > 12 for l in lines)
+        unit_count = len(UNIT_RE.findall(text_all))
+        numbered_count = sum(1 for l in lines if LESSON_NUM_RE.match(l['text']))
+        if has_toc_title or (unit_count >= 2 and numbered_count >= 3):
+            skip.add(p)
+    return skip
+
+
+def _compute_endpages_v2(units, total_pages):
+    """为所有 lesson/sublesson 计算 endPage。
+
+    叶子按 unit→lesson→sublesson 顺序扁平排列，每个叶子的 endPage = 下一个叶子的 startPage - 1。
+    含 children 的 lesson 的 endPage = 最后一个 child 的 endPage（覆盖它和所有子篇目的范围）。
+    """
+    leaves = []
+    for u in units:
+        for l in u['lessons']:
+            if l['type'] == 'lesson':
+                leaves.append(l)
+                for sub in l.get('children', []):
+                    leaves.append(sub)
+    for i, leaf in enumerate(leaves):
+        sp = leaf.get('startPage', 1)
+        leaf['startPage'] = sp
+        nxt = leaves[i + 1]['startPage'] if i + 1 < len(leaves) else total_pages + 1
+        leaf['endPage'] = max(sp, nxt - 1)
+        if leaf['endPage'] > total_pages:
+            leaf['endPage'] = total_pages
+    # 含 children 的 lesson，endPage 取末位 child 的 endPage
+    for u in units:
+        for l in u['lessons']:
+            if l['type'] == 'lesson' and l.get('children'):
+                last = l['children'][-1]
+                l['endPage'] = last.get('endPage', l.get('endPage', total_pages))
     return units
 
 
 def extract_toc_with_fitz(pdf_bytes):
-    """用 pymupdf 提取目录。
+    """用 pymupdf 提取三级目录（参考用户 Python 书签程序的层级规则）。
 
-    关键原则（确保书签与正文一一对应、点击即达正文）：
-    1. 优先使用 PDF 自带书签（doc.get_toc），忠实保留原始层级与页码，不做正则过滤；
-    2. 无书签时按字体大小聚类扫描：标题字号 = 严格大于正文字号，按字号间隔聚类为 3 级；
-    3. 过滤页眉页脚（在多页重复出现的行）；
-    4. 页码即真实 PDF 页码（page_idx+1），pageOffset 恒为 0——无需任何偏移修正。
+    层级规则：
+      L1（单元）= 严格匹配"第X单元"的标题
+      L2（文章）= 编号开头（1 春 / 3* 雨的四季）或栏目关键词开头
+                  （写作 / 综合性学习 / 名著导读 / 课外古诗词诵读）
+      L3（子篇目）= L2 下面的子标题（金色花 / 观沧海 / 咏雪 等）
+    跳过：封面（靠 L3 必须有 L2 父规则）、版权页、目录页、页眉页脚。
+    页码即真实 PDF 页码，pageOffset=0，点击书签直达正文。
     """
     import fitz
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     total_pages = len(doc)
 
-    # 1. 优先使用 PDF 自带书签（最准确，页码即真实 PDF 页码）
+    # 1. 优先使用 PDF 自带书签（最准确，已含层级信息）
     existing_toc = doc.get_toc()
     if existing_toc:
         result = parse_existing_toc(existing_toc, total_pages)
@@ -68,14 +122,15 @@ def extract_toc_with_fitz(pdf_bytes):
             doc.close()
             return result
 
-    # 2. 按字体大小聚类扫描
-    all_lines = []      # [{page, text, fontsize, y}]
+    # 2. 字号扫描提取
+    page_lines = {}      # page -> [lines]
+    text_pages = {}      # text -> set of pages（页眉页脚检测）
     font_count = {}
-    text_pages = {}     # text -> set(pages)，用于检测页眉页脚
 
     for page_idx in range(total_pages):
         page = doc[page_idx]
         blocks = page.get_text("dict")["blocks"]
+        lines = []
         for blk in blocks:
             if blk.get("type", 0) != 0:
                 continue
@@ -97,108 +152,92 @@ def extract_toc_with_fitz(pdf_bytes):
                 # 过滤纯页码行
                 if re.fullmatch(r'[\-—\s]*\d{1,4}[\-—\s]*', line_text):
                     continue
-                fs_key = str(line_max_font)
-                font_count[fs_key] = font_count.get(fs_key, 0) + 1
-                all_lines.append({
+                lines.append({
                     'page': page_idx + 1,
                     'text': line_text,
                     'fontsize': line_max_font,
                     'y': round(line_y, 1)
                 })
                 text_pages.setdefault(line_text, set()).add(page_idx + 1)
+                fs_key = str(line_max_font)
+                font_count[fs_key] = font_count.get(fs_key, 0) + 1
+        page_lines[page_idx + 1] = lines
 
     doc.close()
 
-    if not all_lines:
+    if not font_count:
         return {'units': [], 'pageOffset': 0, 'totalPages': total_pages, 'method': 'none'}
+
+    # 跳过页检测
+    skip_pages = _detect_skip_pages(page_lines)
 
     # 正文字号 = 出现次数最多的字号
     body_font = float(max(font_count.items(), key=lambda x: x[1])[0])
 
-    # 标题行 = 字号严格大于正文（> body + 0.5），并剔除页眉页脚
+    # 标题行 = 字号严格大于正文，不在跳过页，不是页眉页脚
     title_lines = [
-        l for l in all_lines
+        l for p, lines in page_lines.items()
+        for l in lines
         if l['fontsize'] > body_font + 0.5
+        and p not in skip_pages
         and not _is_running_header(text_pages, l['text'], total_pages)
     ]
+    # 按页码、y 坐标排序（先按页，再按 y 从上到下，即降序）
+    title_lines.sort(key=lambda l: (l['page'], -l['y']))
+
     if not title_lines:
         return {'units': [], 'pageOffset': 0, 'totalPages': total_pages,
                 'method': 'none', 'bodyFont': body_font}
 
-    # 按字号聚类：降序排列，相邻字号差 > 1.0 视为不同层级
-    title_sizes = sorted(set(l['fontsize'] for l in title_lines), reverse=True)
-    clusters = []          # 每个簇是该层级的字号列表
-    cur = [title_sizes[0]]
-    for i in range(1, len(title_sizes)):
-        if cur[-1] - title_sizes[i] > 1.0:
-            clusters.append(cur)
-            cur = []
-        cur.append(title_sizes[i])
-    clusters.append(cur)
-
-    # 字号 → 层级映射：簇按代表字号（均值）降序对应 L1/L2/L3（最多 3 级）
-    cluster_reps = [sum(c) / len(c) for c in clusters]
-    order = sorted(range(len(clusters)), key=lambda k: cluster_reps[k], reverse=True)
-    size_to_level = {}
-    for rank, ck in enumerate(order):
-        level = rank + 1 if rank < 2 else 3   # 第1大簇→L1，第2大→L2，其余→L3
-        for sz in clusters[ck]:
-            size_to_level[sz] = level
-
-    # 构建目录树（忠实保留每一条标题行，不按正则过滤）
+    # 按规则构建三级目录
     units = []
     cur_unit = None
-
+    cur_l2 = None
     for line in title_lines:
         text = line['text'].strip()
         page = line['page']
-        fs = line['fontsize']
-        lvl = size_to_level.get(fs, 3)
-
-        if lvl == 1:
+        if _is_unit_title(text):
             cur_unit = {'title': text, 'page': page, 'lessons': []}
             units.append(cur_unit)
-        elif lvl == 2:
+            cur_l2 = None
+        elif _is_lesson_l2(text):
             if cur_unit is None:
                 cur_unit = {'title': '未命名单元', 'page': page, 'lessons': []}
                 units.append(cur_unit)
-            # 含栏目关键词 → 栏目，否则 → 课文
-            is_group = any(text == kw or text.startswith(kw) for kw in GROUP_KEYWORDS)
+            is_group = any(text.startswith(kw) for kw in GROUP_KEYWORDS)
             if is_group:
+                cur_l2 = None
                 cur_unit['lessons'].append({'title': text, 'type': 'group', 'page': page})
             else:
-                cur_unit['lessons'].append({'title': text, 'type': 'lesson', 'startPage': page})
-        else:  # level 3
-            if cur_unit is None:
-                cur_unit = {'title': '未命名单元', 'page': page, 'lessons': []}
-                units.append(cur_unit)
-            cur_unit['lessons'].append({'title': text, 'type': 'lesson', 'startPage': page})
+                cur_l2 = {'title': text, 'type': 'lesson', 'startPage': page, 'children': []}
+                cur_unit['lessons'].append(cur_l2)
+        else:
+            # L3 子篇目：必须有 L2 父，否则丢弃（封面/版权页的杂项大字）
+            if cur_l2 is not None:
+                cur_l2['children'].append({'title': text, 'type': 'sublesson', 'startPage': page})
 
-    # 计算 endPage
-    units = _compute_endpages(units, total_pages)
-
-    # 过滤掉没有课文的单元
+    _compute_endpages_v2(units, total_pages)
     units = [u for u in units if any(l['type'] == 'lesson' for l in u['lessons'])]
 
     return {
         'units': units,
-        'pageOffset': 0,    # pymupdf 提取的页码即真实 PDF 页码，无需偏移
+        'pageOffset': 0,    # pymupdf 页码即真实 PDF 页码，无需偏移
         'totalPages': total_pages,
         'method': 'fontsize',
         'bodyFont': body_font,
-        'titleSizes': [round(r, 1) for r in cluster_reps][:5],
         'titleCount': len(title_lines)
     }
 
 
 def parse_existing_toc(toc_list, total_pages):
-    """忠实解析 PDF 自带书签：保留原始层级与页码，不做正则过滤。
+    """解析 PDF 自带书签为三级结构（与字号扫描结果同构）。
 
-    层级1→单元，层级2→栏目或课文，层级3→课文。页码即真实 PDF 页码，偏移=0。
-    这样书签与正文一一对应，点击书签即到达正文。
+    层级 1 → 单元；层级 2 → lesson（或栏目 group）；层级 3 → sublesson（挂在最近 L2 下）。
+    页码即真实 PDF 页码，偏移 = 0。
     """
     units = []
     cur_unit = None
+    cur_l2 = None
 
     for entry in toc_list:
         if len(entry) < 3:
@@ -210,22 +249,26 @@ def parse_existing_toc(toc_list, total_pages):
         if level == 1:
             cur_unit = {'title': title, 'page': page, 'lessons': []}
             units.append(cur_unit)
+            cur_l2 = None
         elif level == 2:
             if cur_unit is None:
                 cur_unit = {'title': '未命名单元', 'page': page, 'lessons': []}
                 units.append(cur_unit)
             is_group = any(kw in title for kw in GROUP_KEYWORDS)
             if is_group:
+                cur_l2 = None
                 cur_unit['lessons'].append({'title': title, 'type': 'group', 'page': page})
             else:
-                cur_unit['lessons'].append({'title': title, 'type': 'lesson', 'startPage': page})
+                cur_l2 = {'title': title, 'type': 'lesson', 'startPage': page, 'children': []}
+                cur_unit['lessons'].append(cur_l2)
         else:  # level >= 3
-            if cur_unit is None:
-                cur_unit = {'title': '未命名单元', 'page': page, 'lessons': []}
-                units.append(cur_unit)
-            cur_unit['lessons'].append({'title': title, 'type': 'lesson', 'startPage': page})
+            if cur_l2 is not None:
+                cur_l2['children'].append({'title': title, 'type': 'sublesson', 'startPage': page})
+            elif cur_unit is not None:
+                # 无 L2 父 → 当作独立 lesson
+                cur_unit['lessons'].append({'title': title, 'type': 'lesson', 'startPage': page, 'children': []})
 
-    units = _compute_endpages(units, total_pages)
+    _compute_endpages_v2(units, total_pages)
     units = [u for u in units if any(l['type'] == 'lesson' for l in u['lessons'])]
 
     return {'units': units, 'pageOffset': 0, 'totalPages': total_pages, 'method': 'bookmark'}
